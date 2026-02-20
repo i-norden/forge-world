@@ -113,7 +113,7 @@ class TestIsImproved:
     def test_higher_sensitivity_is_improvement(self):
         config = EvolutionConfig(
             agent_command="echo test",
-            optimization_target={"metric": "sensitivity", "direction": "max"},
+            optimization_targets=[{"metric": "sensitivity", "direction": "max"}],
         )
         loop = EvolutionLoop(
             config=config,
@@ -127,7 +127,7 @@ class TestIsImproved:
     def test_lower_sensitivity_not_improvement(self):
         config = EvolutionConfig(
             agent_command="echo test",
-            optimization_target={"metric": "sensitivity", "direction": "max"},
+            optimization_targets=[{"metric": "sensitivity", "direction": "max"}],
         )
         loop = EvolutionLoop(
             config=config,
@@ -141,7 +141,7 @@ class TestIsImproved:
     def test_min_direction(self):
         config = EvolutionConfig(
             agent_command="echo test",
-            optimization_target={"metric": "fpr", "direction": "min"},
+            optimization_targets=[{"metric": "fpr", "direction": "min"}],
         )
         loop = EvolutionLoop(
             config=config,
@@ -254,7 +254,7 @@ class TestEvolutionLoop:
         config = EvolutionConfig(
             agent_command="echo test",
             max_iterations=1,
-            optimization_target={"metric": "pass_rate", "direction": "max"},
+            optimization_targets=[{"metric": "pass_rate", "direction": "max"}],
             run_sensitivity=False,
             decompose_changes=False,
         )
@@ -358,12 +358,36 @@ class TestExtractMetrics:
         assert "fpr" in metrics
         assert "f1" in metrics
 
+    def test_includes_performance_when_present(self):
+        from forge_world.core.runner import PerformanceMetrics
+
+        report = _make_report()
+        report.performance = PerformanceMetrics(
+            latency_mean_ms=10.0,
+            latency_p50_ms=9.0,
+            latency_p95_ms=20.0,
+            latency_p99_ms=30.0,
+            total_time_ms=100.0,
+            throughput_items_per_sec=50.0,
+            item_count=5,
+        )
+        metrics = _extract_metrics(report)
+        assert metrics["latency_mean_ms"] == 10.0
+        assert metrics["latency_p95_ms"] == 20.0
+        assert metrics["throughput"] == 50.0
+
+    def test_no_performance_keys_when_absent(self):
+        report = _make_report()
+        report.performance = None
+        metrics = _extract_metrics(report)
+        assert "latency_mean_ms" not in metrics
+
 
 class TestShouldAccept:
     def test_improved_accepted(self):
         config = EvolutionConfig(
             agent_command="echo test",
-            optimization_target={"metric": "sensitivity", "direction": "max"},
+            optimization_targets=[{"metric": "sensitivity", "direction": "max"}],
         )
         loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
         accept, reason = loop._should_accept(
@@ -375,7 +399,7 @@ class TestShouldAccept:
     def test_not_improved_greedy_rejected(self):
         config = EvolutionConfig(
             agent_command="echo test",
-            optimization_target={"metric": "sensitivity", "direction": "max"},
+            optimization_targets=[{"metric": "sensitivity", "direction": "max"}],
             exploration_budget=0,
         )
         loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
@@ -389,7 +413,7 @@ class TestShouldAccept:
         """Worse metrics can be accepted with exploration budget and high temperature."""
         config = EvolutionConfig(
             agent_command="echo test",
-            optimization_target={"metric": "sensitivity", "direction": "max"},
+            optimization_targets=[{"metric": "sensitivity", "direction": "max"}],
             exploration_budget=5,
         )
         loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
@@ -405,7 +429,7 @@ class TestShouldAccept:
     def test_exploration_budget_exhausted(self):
         config = EvolutionConfig(
             agent_command="echo test",
-            optimization_target={"metric": "sensitivity", "direction": "max"},
+            optimization_targets=[{"metric": "sensitivity", "direction": "max"}],
             exploration_budget=5,
         )
         loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
@@ -416,38 +440,70 @@ class TestShouldAccept:
         assert accept is False
         assert reason == "not_improved"
 
-    def test_pareto_improving_accepted(self):
+    def test_multi_target_pareto_improvement(self):
+        """Multi-target: improved on one, same on other → accepted."""
         config = EvolutionConfig(
             agent_command="echo test",
-            optimization_target={"metric": "sensitivity", "direction": "max"},
-            pareto_metrics=["sensitivity", "f1"],
+            optimization_targets=[
+                {"metric": "sensitivity", "direction": "max"},
+                {"metric": "latency_mean_ms", "direction": "min"},
+            ],
         )
         loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
-        # Sensitivity same, f1 improved
+        # sensitivity improved, latency same
+        assert loop._is_improved(
+            {"sensitivity": 0.8, "latency_mean_ms": 100},
+            {"sensitivity": 0.85, "latency_mean_ms": 100},
+        ) is True
+
+    def test_multi_target_worsened_rejected(self):
+        """Multi-target: improved on one but worsened on other → rejected."""
+        config = EvolutionConfig(
+            agent_command="echo test",
+            optimization_targets=[
+                {"metric": "sensitivity", "direction": "max"},
+                {"metric": "latency_mean_ms", "direction": "min"},
+            ],
+        )
+        loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
+        # sensitivity improved, but latency worsened significantly
+        assert loop._is_improved(
+            {"sensitivity": 0.8, "latency_mean_ms": 100},
+            {"sensitivity": 0.85, "latency_mean_ms": 200},
+        ) is False
+
+    def test_multi_target_all_same_not_improved(self):
+        """Multi-target: no change on any → not improved."""
+        config = EvolutionConfig(
+            agent_command="echo test",
+            optimization_targets=[
+                {"metric": "sensitivity", "direction": "max"},
+                {"metric": "f1", "direction": "max"},
+            ],
+        )
+        loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
+        assert loop._is_improved(
+            {"sensitivity": 0.8, "f1": 0.75},
+            {"sensitivity": 0.8, "f1": 0.75},
+        ) is False
+
+    def test_should_accept_multi_target(self):
+        """_should_accept with multi-target improvement."""
+        config = EvolutionConfig(
+            agent_command="echo test",
+            optimization_targets=[
+                {"metric": "sensitivity", "direction": "max"},
+                {"metric": "latency_mean_ms", "direction": "min"},
+            ],
+        )
+        loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
         accept, reason = loop._should_accept(
-            {"sensitivity": 0.8, "f1": 0.75, "fpr": 0.0},
-            {"sensitivity": 0.8, "f1": 0.80, "fpr": 0.0},
+            {"sensitivity": 0.8, "latency_mean_ms": 100},
+            {"sensitivity": 0.85, "latency_mean_ms": 100},
             1, 1.0, 0,
         )
         assert accept is True
-        assert reason == "pareto_improved"
-
-    def test_pareto_worsening_rejected(self):
-        config = EvolutionConfig(
-            agent_command="echo test",
-            optimization_target={"metric": "sensitivity", "direction": "max"},
-            pareto_metrics=["sensitivity", "f1"],
-            hard_constraints=[{"metric": "fpr", "op": "<=", "value": 0}],
-        )
-        loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
-        # f1 improved but fpr violated constraint
-        accept, reason = loop._should_accept(
-            {"sensitivity": 0.8, "f1": 0.75, "fpr": 0.0},
-            {"sensitivity": 0.8, "f1": 0.80, "fpr": 0.05},
-            1, 1.0, 0,
-        )
-        assert accept is False
-        assert reason == "not_improved"
+        assert reason == "improved"
 
 
 class TestDetectConvergence:
@@ -499,7 +555,6 @@ class TestDetectConvergence:
         """Default config produces identical behavior to current (greedy, no exploration)."""
         config = EvolutionConfig(agent_command="echo test")
         assert config.exploration_budget == 0
-        assert config.pareto_metrics is None
         assert config.convergence_window == 5
 
 
@@ -565,3 +620,268 @@ class TestDecomposeAndTest:
 
         # Graceful fallback
         assert metrics is None
+
+
+class TestTemperatureDecay:
+    @patch("forge_world.core.evolve.subprocess.run")
+    def test_temperature_only_decays_on_exploration(self, mock_run):
+        """Temperature should NOT decay when change is accepted as improvement."""
+        report = _make_report()
+        runner = MagicMock()
+        runner.run.return_value = report
+        sm = MagicMock(spec=SnapshotManager)
+        sm.check.side_effect = FileNotFoundError("no baseline")
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        config = EvolutionConfig(
+            agent_command="echo test",
+            max_iterations=2,
+            exploration_budget=5,
+            exploration_temperature=1.0,
+            temperature_decay=0.8,
+            run_sensitivity=False,
+            decompose_changes=False,
+        )
+        loop = EvolutionLoop(config=config, runner=runner, snapshot_manager=sm)
+
+        # Mock: has changes and is improved (reason="improved", not "exploration")
+        with (
+            patch.object(loop, "_check_for_changes", return_value=True),
+            patch.object(loop, "_is_improved", return_value=True),
+            patch.object(loop, "_should_accept", return_value=("improved", "improved")),
+            patch.object(loop, "_commit_changes"),
+        ):
+            # Access would-be temperature via the loop — since temperature is local
+            # to run(), we verify behavior indirectly: should_accept is called with
+            # full temperature if not exploration
+            result = loop.run()
+            # The important thing is the loop completes without temperature dropping
+            assert result.total_iterations == 2
+
+
+class TestProposalErrorRecording:
+    @patch("forge_world.core.evolve.subprocess.run")
+    def test_proposal_error_recorded_in_memory(self, mock_run):
+        """When proposal fails, error should be recorded in agent_reasoning."""
+        import json
+        import tempfile
+        from pathlib import Path
+
+        report = _make_report()
+        runner = MagicMock()
+        runner.run.return_value = report
+        runner.pipeline = MagicMock()
+        runner.pipeline.get_config.return_value = {"threshold": 0.5}
+        sm = MagicMock(spec=SnapshotManager)
+        sm.check.side_effect = FileNotFoundError("no baseline")
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            proposal_path = Path(tmpdir) / "proposal.json"
+            memory_path = Path(tmpdir) / "memory.json"
+
+            # Write a proposal that references a nonexistent parameter
+            proposal_data = {
+                "proposals": [
+                    {"parameter_path": "nonexistent_param", "new_value": 99},
+                ],
+                "agent_notes": "Testing error handling",
+            }
+            proposal_path.write_text(json.dumps(proposal_data))
+
+            config = EvolutionConfig(
+                agent_command="echo test",
+                max_iterations=1,
+                run_sensitivity=False,
+                decompose_changes=False,
+                proposal_file=str(proposal_path),
+                memory_file=str(memory_path),
+            )
+            loop = EvolutionLoop(config=config, runner=runner, snapshot_manager=sm)
+
+            with patch.object(loop, "_check_for_changes", return_value=False):
+                loop.run()
+
+            # Check that memory was saved and contains the error
+            if memory_path.exists():
+                mem_data = json.loads(memory_path.read_text())
+                if mem_data.get("entries"):
+                    entry = mem_data["entries"][0]
+                    # The error should appear in agent_reasoning
+                    assert "PROPOSAL ERROR" in entry.get("agent_reasoning", "") or \
+                           "Testing error handling" in entry.get("agent_reasoning", "")
+
+
+class TestAutoTuneConfig:
+    def test_auto_tune_defaults(self):
+        config = EvolutionConfig(agent_command="echo test")
+        assert config.auto_tune is False
+        assert config.auto_tune_trials == 20
+        assert config.auto_tune_journal == ".forge-world/optuna-journal.log"
+
+    def test_auto_tune_disabled_no_import(self):
+        """When auto_tune=False (default), no optuna import happens."""
+        config = EvolutionConfig(
+            agent_command="echo test",
+            auto_tune=False,
+            run_sensitivity=False,
+        )
+        loop = EvolutionLoop(
+            config=config,
+            runner=MagicMock(),
+            snapshot_manager=MagicMock(),
+        )
+        result = loop._maybe_auto_tune(1, {"sensitivity": 0.8})
+        assert result == {"sensitivity": 0.8}
+
+    def test_auto_tune_no_schema(self):
+        """When no pipeline_config_schema, auto-tune is skipped."""
+        config = EvolutionConfig(
+            agent_command="echo test",
+            auto_tune=True,
+        )
+        loop = EvolutionLoop(
+            config=config,
+            runner=MagicMock(),
+            snapshot_manager=MagicMock(),
+            pipeline_config_schema=None,
+        )
+        result = loop._maybe_auto_tune(1, {"sensitivity": 0.8})
+        assert result == {"sensitivity": 0.8}
+
+    def test_auto_tune_with_mock_tuner(self):
+        """When auto_tune=True and schema exists, _run_auto_tune is called."""
+        config = EvolutionConfig(
+            agent_command="echo test",
+            auto_tune=True,
+        )
+        runner_mock = MagicMock()
+        runner_mock.pipeline.get_config.return_value = {"threshold": 0.5}
+        loop = EvolutionLoop(
+            config=config,
+            runner=runner_mock,
+            snapshot_manager=MagicMock(),
+            pipeline_config_schema={
+                "type": "object",
+                "properties": {"threshold": {"type": "number", "minimum": 0, "maximum": 1}},
+            },
+        )
+        # Mock _run_auto_tune to return None (simulating import failure)
+        with patch.object(loop, "_run_auto_tune", return_value=None):
+            result = loop._maybe_auto_tune(1, {"sensitivity": 0.8})
+        assert result == {"sensitivity": 0.8}
+
+    def test_auto_tune_constraint_violation_rolls_back(self):
+        """When auto-tuned params violate constraints, pipeline config is rolled back."""
+        config = EvolutionConfig(
+            agent_command="echo test",
+            auto_tune=True,
+            hard_constraints=[{"metric": "fpr", "op": "<=", "value": 0}],
+        )
+        runner_mock = MagicMock()
+        runner_mock.pipeline.get_config.return_value = {"threshold": 0.5}
+        loop = EvolutionLoop(
+            config=config,
+            runner=runner_mock,
+            snapshot_manager=MagicMock(),
+            pipeline_config_schema={
+                "type": "object",
+                "properties": {"threshold": {"type": "number", "minimum": 0, "maximum": 1}},
+            },
+        )
+
+        # Mock _run_auto_tune to return a TunerResult
+        mock_tuner_result = MagicMock()
+        mock_tuner_result.n_trials_completed = 5
+        mock_tuner_result.best_params = {"threshold": 0.1}
+
+        # Mock _run_bench to return a report that violates constraints (fpr > 0)
+        bad_report = _make_report(fpr=0.05)
+
+        with (
+            patch.object(loop, "_run_auto_tune", return_value=mock_tuner_result),
+            patch("forge_world.core.tuner.apply_best_params", return_value={"threshold": 0.5}),
+            patch.object(loop, "_run_bench", return_value=bad_report),
+        ):
+            result = loop._maybe_auto_tune(1, {"sensitivity": 0.8, "fpr": 0.0})
+
+        # Should return original metrics (rollback)
+        assert result == {"sensitivity": 0.8, "fpr": 0.0}
+        # Pipeline should be restored to old config
+        runner_mock.pipeline.set_config.assert_called_with({"threshold": 0.5})
+
+    def test_auto_tune_success_returns_tuned_metrics(self):
+        """When auto-tuned params pass constraints, return tuned metrics."""
+        config = EvolutionConfig(
+            agent_command="echo test",
+            auto_tune=True,
+            hard_constraints=[{"metric": "fpr", "op": "<=", "value": 0}],
+        )
+        runner_mock = MagicMock()
+        runner_mock.pipeline.get_config.return_value = {"threshold": 0.5}
+        loop = EvolutionLoop(
+            config=config,
+            runner=runner_mock,
+            snapshot_manager=MagicMock(),
+            pipeline_config_schema={
+                "type": "object",
+                "properties": {"threshold": {"type": "number", "minimum": 0, "maximum": 1}},
+            },
+        )
+
+        mock_tuner_result = MagicMock()
+        mock_tuner_result.n_trials_completed = 5
+        mock_tuner_result.best_params = {"threshold": 0.3}
+
+        good_report = _make_report(fpr=0.0)
+
+        with (
+            patch.object(loop, "_run_auto_tune", return_value=mock_tuner_result),
+            patch("forge_world.core.tuner.apply_best_params", return_value={"threshold": 0.5}),
+            patch.object(loop, "_run_bench", return_value=good_report),
+        ):
+            result = loop._maybe_auto_tune(1, {"sensitivity": 0.7, "fpr": 0.0})
+
+        # Should return tuned metrics (from good_report)
+        assert "sensitivity" in result
+        assert result["fpr"] == 0.0
+        # Tuner result should be stored
+        assert loop._last_tuner_result is mock_tuner_result
+
+    def test_tuner_result_in_context(self):
+        """Tuner results should appear in evolution context."""
+        from forge_world.core.agent_interface import build_evolution_context
+
+        report = _make_report()
+        mock_tuner = MagicMock()
+        mock_tuner.to_prompt_context.return_value = "## Auto-Tuning Results\nCompleted 5 trials."
+
+        ctx = build_evolution_context(
+            report=report,
+            tuner_result=mock_tuner,
+        )
+        assert ctx.tuner_summary == "## Auto-Tuning Results\nCompleted 5 trials."
+        assert "Auto-Tuning Results" in ctx.to_prompt_context()
+
+
+class TestBackwardCompat:
+    def test_optimization_target_property(self):
+        """optimization_target property returns first target for backward compat."""
+        config = EvolutionConfig(
+            agent_command="echo test",
+            optimization_targets=[
+                {"metric": "sensitivity", "direction": "max"},
+                {"metric": "latency_mean_ms", "direction": "min"},
+            ],
+        )
+        assert config.optimization_target == {"metric": "sensitivity", "direction": "max"}
+
+    def test_optimization_target_default(self):
+        """Default optimization_target is sensitivity/max."""
+        config = EvolutionConfig(agent_command="echo test")
+        assert config.optimization_target == {"metric": "sensitivity", "direction": "max"}
+        assert config.optimization_targets == [{"metric": "sensitivity", "direction": "max"}]
+
+

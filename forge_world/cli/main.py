@@ -180,6 +180,14 @@ def _print_report_table(report):
             f"[red bold]WARNING: {report.confusion_matrix.false_positives} "
             f"false positive(s)![/red bold]"
         )
+
+    if getattr(report, "performance", None) is not None:
+        perf = report.performance
+        console.print(
+            f"[bold]Latency:[/bold] mean={perf.latency_mean_ms:.1f}ms "
+            f"p95={perf.latency_p95_ms:.1f}ms | "
+            f"[bold]Throughput:[/bold] {perf.throughput_items_per_sec:.1f} items/sec"
+        )
     console.print()
 
 
@@ -224,6 +232,14 @@ def _print_multi_report_table(multi_report):
 
     if am.worst_case_fpr > 0:
         console.print("[red bold]WARNING: False positives detected on at least one seed![/red bold]")
+
+    if getattr(multi_report, "performance", None) is not None:
+        perf = multi_report.performance
+        console.print(
+            f"[bold]Latency:[/bold] mean={perf.latency_mean_ms:.1f}ms "
+            f"p95={perf.latency_p95_ms:.1f}ms | "
+            f"[bold]Throughput:[/bold] {perf.throughput_items_per_sec:.1f} items/sec"
+        )
 
     # Unstable items
     unstable = [
@@ -825,8 +841,9 @@ def sensitivity(
 @click.option("--exploration-budget", default=0, type=int, help="Number of lateral/worse moves allowed (0 = greedy)")
 @click.option("--temperature", default=1.0, type=float, help="Initial exploration acceptance temperature")
 @click.option("--temperature-decay", default=0.8, type=float, help="Temperature decay per iteration")
-@click.option("--pareto-metrics", default=None, help="Comma-separated metrics for Pareto acceptance")
 @click.option("--decompose/--no-decompose", "decompose_changes", default=True, help="Decompose multi-file changes")
+@click.option("--auto-tune/--no-auto-tune", "auto_tune", default=False, help="Enable Optuna auto-tuning of numeric params after acceptance")
+@click.option("--auto-tune-trials", default=20, type=int, help="Number of Optuna trials per auto-tune round")
 @click.pass_context
 def evolve(
     ctx,
@@ -844,8 +861,9 @@ def evolve(
     exploration_budget: int,
     temperature: float,
     temperature_decay: float,
-    pareto_metrics: str | None,
     decompose_changes: bool,
+    auto_tune: bool,
+    auto_tune_trials: int,
 ):
     """Autonomous bench-modify-bench evolution loop."""
     from forge_world.core.evolve import EvolutionConfig, EvolutionLoop
@@ -870,26 +888,32 @@ def evolve(
 
     resolved_max_iterations = max_iterations or evolve_toml.get("max_iterations", 10)
     hard_constraints = evolve_toml.get("hard_constraints", [{"metric": "fpr", "op": "<=", "value": 0}])
-    optimization_target = evolve_toml.get(
-        "optimization_target", {"metric": "sensitivity", "direction": "max"}
-    )
 
-    parsed_pareto: list[str] | None = None
-    if pareto_metrics:
-        parsed_pareto = [m.strip() for m in pareto_metrics.split(",")]
+    # Support both singular and plural optimization target(s)
+    if "optimization_targets" in evolve_toml:
+        optimization_targets = evolve_toml["optimization_targets"]
+    elif "optimization_target" in evolve_toml:
+        optimization_targets = [evolve_toml["optimization_target"]]
+    else:
+        optimization_targets = [{"metric": "sensitivity", "direction": "max"}]
+
+    # Resolve auto-tune: CLI flag > TOML > default (False)
+    resolved_auto_tune = auto_tune or evolve_toml.get("auto_tune", False)
+    resolved_auto_tune_trials = auto_tune_trials if auto_tune_trials != 20 else evolve_toml.get("auto_tune_trials", 20)
 
     config = EvolutionConfig(
         agent_command=resolved_agent_command,
         max_iterations=resolved_max_iterations,
         hard_constraints=hard_constraints,
-        optimization_target=optimization_target,
+        optimization_targets=optimization_targets,
         convergence_patience=patience,
         run_sensitivity=run_sensitivity,
         decompose_changes=decompose_changes,
         exploration_budget=exploration_budget,
         exploration_temperature=temperature,
         temperature_decay=temperature_decay,
-        pareto_metrics=parsed_pareto,
+        auto_tune=resolved_auto_tune,
+        auto_tune_trials=resolved_auto_tune_trials,
     )
 
     # Build run kwargs for the evolution loop

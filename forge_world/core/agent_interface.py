@@ -75,6 +75,10 @@ class EvolutionContext:
     sensitivity_summary: str = ""
     exploration_state: dict[str, Any] = field(default_factory=dict)
     evolve_mode: bool = False
+    validation_errors: str = ""
+    performance_summary: str = ""
+    tuner_summary: str = ""
+    optimization_targets: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -110,6 +114,12 @@ class EvolutionContext:
         if self.exploration_state:
             d["exploration_state"] = self.exploration_state
         d["evolve_mode"] = self.evolve_mode
+        if self.validation_errors:
+            d["validation_errors"] = self.validation_errors
+        if self.performance_summary:
+            d["performance_summary"] = self.performance_summary
+        if self.tuner_summary:
+            d["tuner_summary"] = self.tuner_summary
         return d
 
     def to_prompt_context(self) -> str:
@@ -119,6 +129,10 @@ class EvolutionContext:
         # 1. Header
         lines.append("# Evolution Context")
         lines.append("")
+
+        # 1b. Validation errors from last iteration
+        if self.validation_errors:
+            lines.append(self.validation_errors)
 
         # 2. Current metrics
         lines.append("## Current Performance")
@@ -139,6 +153,14 @@ class EvolutionContext:
         # 4. Parameter Sensitivity (from sensitivity)
         if self.sensitivity_summary:
             lines.append(self.sensitivity_summary)
+
+        # 4b. Auto-tuning results
+        if self.tuner_summary:
+            lines.append(self.tuner_summary)
+
+        # 4c. Performance
+        if self.performance_summary:
+            lines.append(self.performance_summary)
 
         # 5. Exploration State
         if self.exploration_state:
@@ -332,7 +354,13 @@ class EvolutionContext:
                 lines.append(f"- {c['metric']} {c['op']} {c['value']}")
             lines.append("")
 
-        if self.optimization_target:
+        if self.optimization_targets:
+            lines.append("## Optimization Targets")
+            for t in self.optimization_targets:
+                verb = "Maximize" if t.get("direction", "max") == "max" else "Minimize"
+                lines.append(f"- {verb} **{t.get('metric', '?')}**")
+            lines.append("")
+        elif self.optimization_target:
             lines.append("## Optimization Target")
             lines.append(
                 f"Maximize **{self.optimization_target.get('metric', '?')}** "
@@ -365,6 +393,11 @@ class EvolutionContext:
             lines.append("### Option 2: File Editing (for structural/algorithmic changes)")
             lines.append("Edit source files directly. Both options can be combined.")
             lines.append("")
+            lines.append("### Auto-Tuning")
+            lines.append("Numeric parameters are automatically optimized via Optuna after your")
+            lines.append("structural changes are accepted (when enabled). Focus on algorithmic")
+            lines.append("and structural improvements.")
+            lines.append("")
 
         return "\n".join(lines)
 
@@ -375,30 +408,43 @@ def build_evolution_context(
     pipeline_config_schema: dict[str, Any] | None = None,
     hard_constraints: list[dict[str, Any]] | None = None,
     optimization_target: dict[str, Any] | None = None,
+    optimization_targets: list[dict[str, Any]] | None = None,
     sample_size: int | None = None,
     diagnostics: list[dict[str, Any]] | None = None,
-    # New parameters:
     memory: Any | None = None,
     sensitivity: Any | None = None,
     evolve_mode: bool = False,
     exploration_state: dict[str, Any] | None = None,
+    validation_errors: str = "",
+    tuner_result: Any | None = None,
 ) -> EvolutionContext:
     """Build an EvolutionContext from a benchmark report and optional regression data.
 
     Accepts either a single-seed ``BenchmarkReport`` or a ``MultiBenchmarkReport``.
+    Supports both singular ``optimization_target`` (backward compat) and plural
+    ``optimization_targets`` (multi-objective).
     """
+    # Normalize: prefer optimization_targets if provided
+    resolved_targets = optimization_targets
+    if resolved_targets is None and optimization_target is not None:
+        resolved_targets = [optimization_target]
+
     if isinstance(report, MultiBenchmarkReport):
         ctx = _build_multi_context(
             report, regression, pipeline_config_schema,
-            hard_constraints, optimization_target, sample_size,
+            hard_constraints, resolved_targets, sample_size,
         )
     else:
         ctx = _build_single_context(
             report, regression, pipeline_config_schema,
-            hard_constraints, optimization_target, sample_size,
+            hard_constraints, resolved_targets, sample_size,
         )
     if diagnostics:
         ctx.diagnostic_clusters = diagnostics
+
+    # Set multi-target list if more than one target
+    if resolved_targets and len(resolved_targets) > 1:
+        ctx.optimization_targets = resolved_targets
 
     # Add memory summary
     if memory is not None:
@@ -412,6 +458,23 @@ def build_evolution_context(
     ctx.evolve_mode = evolve_mode
     if exploration_state:
         ctx.exploration_state = exploration_state
+    if validation_errors:
+        ctx.validation_errors = validation_errors
+
+    # Add performance summary
+    perf = getattr(report, "performance", None)
+    if perf is not None:
+        lines = ["## Performance"]
+        lines.append(f"- Mean latency: {perf.latency_mean_ms:.1f}ms")
+        lines.append(f"- P95 latency: {perf.latency_p95_ms:.1f}ms")
+        lines.append(f"- Throughput: {perf.throughput_items_per_sec:.1f} items/sec")
+        lines.append(f"- Items analyzed: {perf.item_count}")
+        lines.append("")
+        ctx.performance_summary = "\n".join(lines)
+
+    # Add tuner summary
+    if tuner_result is not None and hasattr(tuner_result, "to_prompt_context"):
+        ctx.tuner_summary = tuner_result.to_prompt_context()
 
     return ctx
 
@@ -421,7 +484,7 @@ def _build_single_context(
     regression: RegressionReport | None,
     pipeline_config_schema: dict[str, Any] | None,
     hard_constraints: list[dict[str, Any]] | None,
-    optimization_target: dict[str, Any] | None,
+    optimization_targets: list[dict[str, Any]] | None,
     sample_size: int | None,
 ) -> EvolutionContext:
     """Build context from a single-seed report."""
@@ -474,7 +537,7 @@ def _build_single_context(
         current_config=report.config_snapshot,
         config_schema=pipeline_config_schema or {},
         hard_constraints=hard_constraints or [],
-        optimization_target=optimization_target or {"metric": "sensitivity", "direction": "max"},
+        optimization_target=(optimization_targets or [{"metric": "sensitivity", "direction": "max"}])[0],
         sample_size=sample_size,
     )
 
@@ -484,7 +547,7 @@ def _build_multi_context(
     regression: RegressionReport | None,
     pipeline_config_schema: dict[str, Any] | None,
     hard_constraints: list[dict[str, Any]] | None,
-    optimization_target: dict[str, Any] | None,
+    optimization_targets: list[dict[str, Any]] | None,
     sample_size: int | None,
 ) -> EvolutionContext:
     """Build context from a multi-seed report."""
@@ -572,7 +635,7 @@ def _build_multi_context(
         current_config=report.config_snapshot,
         config_schema=pipeline_config_schema or {},
         hard_constraints=hard_constraints or [],
-        optimization_target=optimization_target or {"metric": "sensitivity", "direction": "max"},
+        optimization_target=(optimization_targets or [{"metric": "sensitivity", "direction": "max"}])[0],
         seed_variance=seed_variance,
         item_stability=item_stability_list,
         sample_size=sample_size,

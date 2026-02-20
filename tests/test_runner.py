@@ -15,8 +15,10 @@ from forge_world.core.runner import (
     BenchmarkRunner,
     ItemResult,
     MultiBenchmarkReport,
+    PerformanceMetrics,
     SeedStrategy,
     _compute_aggregate_metrics,
+    _compute_performance_metrics,
     _derive_exploration_seeds,
 )
 
@@ -781,3 +783,119 @@ class TestDeriveExplorationSeeds:
         assert len(seeds) == 5
         # All should be non-negative
         assert all(s >= 0 for s in seeds)
+
+
+class TestPerformanceMetrics:
+    def test_to_dict(self):
+        perf = PerformanceMetrics(
+            latency_mean_ms=10.5,
+            latency_p50_ms=9.0,
+            latency_p95_ms=20.0,
+            latency_p99_ms=30.0,
+            total_time_ms=100.0,
+            throughput_items_per_sec=50.0,
+            item_count=5,
+        )
+        d = perf.to_dict()
+        assert d["latency_mean_ms"] == 10.5
+        assert d["latency_p50_ms"] == 9.0
+        assert d["latency_p95_ms"] == 20.0
+        assert d["latency_p99_ms"] == 30.0
+        assert d["item_count"] == 5
+
+    def test_compute_known_latencies(self):
+        latencies = [10.0, 20.0, 30.0, 40.0, 50.0]
+        perf = _compute_performance_metrics(latencies, 200.0)
+        assert perf is not None
+        assert perf.latency_mean_ms == 30.0
+        assert perf.item_count == 5
+        assert perf.total_time_ms == 200.0
+        assert perf.throughput_items_per_sec == 25.0  # 5 / 200ms * 1000
+
+    def test_compute_empty_returns_none(self):
+        perf = _compute_performance_metrics([], 100.0)
+        assert perf is None
+
+    def test_compute_single_latency(self):
+        perf = _compute_performance_metrics([42.0], 50.0)
+        assert perf is not None
+        assert perf.latency_mean_ms == 42.0
+        assert perf.latency_p50_ms == 42.0
+        assert perf.latency_p95_ms == 42.0
+        assert perf.latency_p99_ms == 42.0
+        assert perf.item_count == 1
+
+
+class TestBenchmarkRunnerPerformance:
+    def test_run_produces_performance(self):
+        """BenchmarkRunner.run() should produce performance metrics."""
+        items = [
+            LabeledItem(
+                id="item1", category="test", expected_label="findings",
+                data={"id": "item1", "score": 0.9, "method": "test"},
+            ),
+            LabeledItem(
+                id="item2", category="clean", expected_label="clean",
+                data={"id": "item2", "score": 0.1, "method": "test"},
+            ),
+        ]
+        runner = BenchmarkRunner(
+            pipeline=FakePipeline(),
+            aggregator=FakeAggregator(),
+            dataset=FakeDataset(items),
+            rules=FakeRules(),
+        )
+        report = runner.run()
+        assert report.performance is not None
+        assert report.performance.item_count == 2
+        assert report.performance.latency_mean_ms > 0
+        assert report.performance.total_time_ms > 0
+
+    def test_cached_items_excluded_from_latency(self):
+        """Items served from cache should NOT be included in latency stats."""
+        items = [
+            LabeledItem(
+                id="item1", category="test", expected_label="findings",
+                data={"id": "item1", "score": 0.9, "method": "test"},
+            ),
+            LabeledItem(
+                id="item2", category="clean", expected_label="clean",
+                data={"id": "item2", "score": 0.1, "method": "test"},
+            ),
+        ]
+        runner = BenchmarkRunner(
+            pipeline=FakePipeline(),
+            aggregator=FakeAggregator(),
+            dataset=FakeDataset(items),
+            rules=FakeRules(),
+        )
+
+        # First run: all items analyzed
+        report1 = runner.run()
+        assert report1.performance is not None
+        assert report1.performance.item_count == 2
+
+        # Second run with in-memory cache: all cached
+        cache = {"item1": [], "item2": []}
+        report2 = runner.run(_analysis_cache=cache)
+        # Performance should be None (no items analyzed)
+        assert report2.performance is None
+
+    def test_performance_in_to_dict(self):
+        """Performance metrics should appear in report.to_dict()."""
+        items = [
+            LabeledItem(
+                id="item1", category="test", expected_label="findings",
+                data={"id": "item1", "score": 0.9, "method": "test"},
+            ),
+        ]
+        runner = BenchmarkRunner(
+            pipeline=FakePipeline(),
+            aggregator=FakeAggregator(),
+            dataset=FakeDataset(items),
+            rules=FakeRules(),
+        )
+        report = runner.run()
+        d = report.to_dict()
+        assert "performance" in d
+        assert d["performance"]["item_count"] == 1

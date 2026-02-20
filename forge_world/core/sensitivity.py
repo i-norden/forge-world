@@ -395,3 +395,5 @@ def _run_bench(runner: Any, run_kwargs: dict[str, Any] | None = None):
         return runner.run_multi(seed_strategy, sample_size=sample_size, tier=tier)
     else:
         return runner.run(sample_size=sample_size, tier=tier)
+
+

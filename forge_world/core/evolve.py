@@ -9,6 +9,7 @@ smart convergence, and exploration budget.
 
 from __future__ import annotations
 
+import logging
 import math
 import random
 import subprocess
@@ -20,9 +21,17 @@ from typing import Any
 
 from forge_world.core.agent_interface import build_evolution_context
 from forge_world.core.memory import EvolutionMemory, MemoryEntry, compute_parameter_diff
-from forge_world.core.proposals import ProposalFile, apply_proposals, rollback_proposals
+from forge_world.core.proposals import (
+    ProposalFile,
+    apply_proposals,
+    rollback_proposals,
+    validate_proposals,
+)
 from forge_world.core.runner import BenchmarkRunner, MultiBenchmarkReport
-from forge_world.core.sensitivity import SensitivityReport, compute_sensitivity
+from forge_world.core.sensitivity import (
+    SensitivityReport,
+    compute_sensitivity,
+)
 from forge_world.core.snapshots import SnapshotManager
 
 
@@ -33,9 +42,14 @@ class EvolutionConfig:
     hard_constraints: list[dict[str, Any]] = field(
         default_factory=lambda: [{"metric": "fpr", "op": "<=", "value": 0}]
     )
-    optimization_target: dict[str, Any] = field(
-        default_factory=lambda: {"metric": "sensitivity", "direction": "max"}
+    optimization_targets: list[dict[str, Any]] = field(
+        default_factory=lambda: [{"metric": "sensitivity", "direction": "max"}]
     )
+
+    @property
+    def optimization_target(self) -> dict[str, Any]:
+        """Primary optimization target (first in list). Backward compat."""
+        return self.optimization_targets[0] if self.optimization_targets else {"metric": "sensitivity", "direction": "max"}
     convergence_patience: int = 3
     context_file: str = ".forge-world/evolution-context.md"
 
@@ -57,12 +71,14 @@ class EvolutionConfig:
     exploration_temperature: float = 1.0  # initial acceptance temperature
     temperature_decay: float = 0.8  # temperature *= decay each round
 
-    # Pareto
-    pareto_metrics: list[str] | None = None  # if set, accept Pareto-improving moves
-
     # Convergence
     convergence_window: int = 5  # rolling window for oscillation detection
     min_progress: float = 0.001  # minimum metric change to count as progress
+
+    # Auto-tuning (Optuna)
+    auto_tune: bool = False
+    auto_tune_trials: int = 20
+    auto_tune_journal: str = ".forge-world/optuna-journal.log"
 
 
 @dataclass
@@ -154,18 +170,30 @@ def _extract_metrics(report) -> dict[str, float]:
     """Extract key metrics from a report."""
     if isinstance(report, MultiBenchmarkReport):
         am = report.aggregate_metrics
-        return {
+        metrics: dict[str, float] = {
             "pass_rate": am.mean_pass_rate,
             "sensitivity": am.mean_sensitivity,
             "fpr": am.worst_case_fpr,
             "f1": am.mean_f1,
         }
-    return {
-        "pass_rate": report.pass_rate,
-        "sensitivity": report.sensitivity,
-        "fpr": report.fpr,
-        "f1": report.f1,
-    }
+    else:
+        metrics = {
+            "pass_rate": report.pass_rate,
+            "sensitivity": report.sensitivity,
+            "fpr": report.fpr,
+            "f1": report.f1,
+        }
+
+    # Include performance metrics if available
+    perf = getattr(report, "performance", None)
+    if perf is not None:
+        metrics["latency_mean_ms"] = perf.latency_mean_ms
+        metrics["latency_p50_ms"] = perf.latency_p50_ms
+        metrics["latency_p95_ms"] = perf.latency_p95_ms
+        metrics["latency_p99_ms"] = perf.latency_p99_ms
+        metrics["throughput"] = perf.throughput_items_per_sec
+
+    return metrics
 
 
 class EvolutionLoop:
@@ -192,6 +220,8 @@ class EvolutionLoop:
         self.on_iteration_complete = on_iteration_complete
         self.run_kwargs = run_kwargs or {}
         self.baseline_name = baseline_name
+        self._pending_validation_errors = ""
+        self._last_tuner_result = None
 
     def run(self) -> EvolutionResult:
         """Execute the evolution loop."""
@@ -200,6 +230,8 @@ class EvolutionLoop:
 
         # 1. Load memory (persists across restarts)
         memory = EvolutionMemory.load(Path(self.config.memory_file))
+        memory.target_metric = self.config.optimization_target.get("metric", "sensitivity")
+        memory.target_direction = self.config.optimization_target.get("direction", "max")
 
         # 2. Run sensitivity analysis (if enabled, cached)
         sensitivity = self._maybe_run_sensitivity()
@@ -265,14 +297,17 @@ class EvolutionLoop:
                 regression=regression,
                 pipeline_config_schema=self.pipeline_config_schema,
                 hard_constraints=self.config.hard_constraints,
-                optimization_target=self.config.optimization_target,
+                optimization_targets=self.config.optimization_targets,
                 sample_size=self.run_kwargs.get("sample_size"),
                 diagnostics=diagnostics_data,
                 memory=memory,
                 sensitivity=sensitivity,
                 evolve_mode=True,
                 exploration_state=exploration_state if self.config.exploration_budget > 0 else None,
+                validation_errors=self._pending_validation_errors,
+                tuner_result=self._last_tuner_result,
             )
+            self._pending_validation_errors = ""
 
             self._write_context(context)
 
@@ -303,17 +338,45 @@ class EvolutionLoop:
                     self.on_iteration_complete(i, iteration)
                 break
 
-            # 7. Check for proposals
+            # 7. Check for parameter proposals
             proposal = ProposalFile.load(Path(self.config.proposal_file))
             old_config = None
             agent_reasoning = ""
-            if proposal:
+            validation_error_summary = ""
+
+            if proposal is not None:
+                raw_proposals = list(proposal.proposals)
+                agent_reasoning = proposal.agent_notes
+            else:
+                raw_proposals = []
+
+            if raw_proposals:
+                proposals_to_apply = raw_proposals
+                # Validate against schema if available
+                if self.pipeline_config_schema and proposals_to_apply:
+                    validation_result = validate_proposals(
+                        proposals_to_apply,
+                        self.pipeline_config_schema,
+                        config_before,
+                    )
+                    proposals_to_apply = validation_result.valid_proposals
+                    if validation_result.errors:
+                        validation_error_summary = validation_result.error_summary()
                 try:
-                    old_config = apply_proposals(self.runner.pipeline, proposal.proposals)
-                    agent_reasoning = proposal.agent_notes
-                except (KeyError, Exception):
-                    pass
+                    if proposals_to_apply:
+                        old_config = apply_proposals(self.runner.pipeline, proposals_to_apply)
+                    if validation_error_summary:
+                        agent_reasoning = f"{validation_error_summary}\n{agent_reasoning}"
+                except (KeyError, Exception) as exc:
+                    logging.getLogger("forge_world").warning("Proposal failed: %s", exc)
+                    agent_reasoning = f"[PROPOSAL ERROR: {exc}] {agent_reasoning}"
+
+            if proposal is not None:
                 Path(self.config.proposal_file).unlink(missing_ok=True)
+
+            # Store validation errors for next iteration's context
+            if validation_error_summary:
+                self._pending_validation_errors = validation_error_summary
 
             # 8. Check for file changes
             has_file_changes = self._check_for_changes()
@@ -393,6 +456,8 @@ class EvolutionLoop:
                                 metrics_after, True, reason, [], agent_reasoning,
                                 param_changes=param_changes,
                             )
+                            # Auto-tune after acceptance
+                            metrics_after = self._maybe_auto_tune(i, metrics_after)
                             metrics_before = metrics_after
                             report = self._run_bench()
                             no_improvement_count = 0
@@ -415,7 +480,9 @@ class EvolutionLoop:
                         metric_history.append(
                             metrics_after.get(self.config.optimization_target.get("metric", "sensitivity"), 0)
                         )
-                        temperature *= self.config.temperature_decay
+                        # Only decay temperature when exploration budget is consumed
+                        if reason == "exploration":
+                            temperature *= self.config.temperature_decay
 
                         if no_improvement_count >= self.config.convergence_patience:
                             result.convergence_reason = "converged"
@@ -484,6 +551,8 @@ class EvolutionLoop:
                         metrics_after, True, reason, [], agent_reasoning,
                         param_changes=param_changes,
                     )
+                    # Auto-tune after acceptance
+                    metrics_after = self._maybe_auto_tune(i, metrics_after)
                     metrics_before = metrics_after
                     report = new_report
                     no_improvement_count = 0
@@ -507,7 +576,9 @@ class EvolutionLoop:
                 metric_history.append(
                     metrics_after.get(self.config.optimization_target.get("metric", "sensitivity"), 0)
                 )
-                temperature *= self.config.temperature_decay
+                # Only decay temperature when exploration budget is consumed
+                if reason == "exploration":
+                    temperature *= self.config.temperature_decay
 
                 if no_improvement_count >= self.config.convergence_patience:
                     result.convergence_reason = "converged"
@@ -560,6 +631,54 @@ class EvolutionLoop:
             report.save(cache_path)
             return report
         except Exception:
+            return None
+
+    def _maybe_auto_tune(
+        self, iteration: int, current_metrics: dict[str, float],
+    ) -> dict[str, float]:
+        """Run Optuna auto-tuning if enabled. Returns updated metrics."""
+        if not self.config.auto_tune or not self.pipeline_config_schema:
+            return current_metrics
+
+        tuner_result = self._run_auto_tune()
+        if tuner_result is None or tuner_result.n_trials_completed == 0:
+            return current_metrics
+
+        self._last_tuner_result = tuner_result
+
+        try:
+            from forge_world.core.tuner import apply_best_params
+            old = apply_best_params(self.runner.pipeline, tuner_result)
+            tuned_report = self._run_bench()
+            tuned_metrics = _extract_metrics(tuned_report)
+            violations = self._check_constraints(tuned_metrics)
+            if violations:
+                self.runner.pipeline.set_config(old)  # rollback tuning
+                return current_metrics
+            return tuned_metrics
+        except Exception as exc:
+            logging.getLogger("forge_world").warning("Auto-tune apply failed: %s", exc)
+            return current_metrics
+
+    def _run_auto_tune(self):
+        """Run Optuna auto-tuning. Returns TunerResult or None."""
+        try:
+            from forge_world.core.tuner import TunerConfig, run_tuning
+            from forge_world.core.sensitivity import walk_numeric_parameters
+            schema_params = walk_numeric_parameters(self.pipeline_config_schema)
+            if not schema_params:
+                return None
+            tuner_config = TunerConfig(
+                n_trials=self.config.auto_tune_trials,
+                journal_path=self.config.auto_tune_journal,
+                optimization_targets=self.config.optimization_targets,
+                hard_constraints=self.config.hard_constraints,
+            )
+            return run_tuning(self.runner, tuner_config, schema_params, self.run_kwargs)
+        except ImportError:
+            return None
+        except Exception as exc:
+            logging.getLogger("forge_world").warning("Auto-tune failed: %s", exc)
             return None
 
     def _capture_config(self) -> dict[str, Any]:
@@ -687,15 +806,40 @@ class EvolutionLoop:
         before: dict[str, float],
         after: dict[str, float],
     ) -> bool:
-        """Check if the optimization target improved."""
-        target = self.config.optimization_target
-        metric = target.get("metric", "sensitivity")
-        direction = target.get("direction", "max")
-        before_val = before.get(metric, 0)
-        after_val = after.get(metric, 0)
-        if direction == "max":
-            return after_val > before_val
-        return after_val < before_val
+        """Check if optimization targets improved.
+
+        Single target (len==1): strict improvement on that metric.
+        Multi target: Pareto improvement — at least one target improved
+        AND none worsened (beyond min_progress tolerance).
+        """
+        targets = self.config.optimization_targets
+        if len(targets) <= 1:
+            target = self.config.optimization_target
+            metric = target.get("metric", "sensitivity")
+            direction = target.get("direction", "max")
+            before_val = before.get(metric, 0)
+            after_val = after.get(metric, 0)
+            if direction == "max":
+                return after_val > before_val
+            return after_val < before_val
+
+        # Multi-target: Pareto improvement
+        improved_any = False
+        min_progress = self.config.min_progress
+        for target in targets:
+            metric = target.get("metric", "sensitivity")
+            direction = target.get("direction", "max")
+            before_val = before.get(metric, 0)
+            after_val = after.get(metric, 0)
+            if direction == "max":
+                diff = after_val - before_val
+            else:
+                diff = before_val - after_val  # positive = improvement for min
+            if diff > min_progress:
+                improved_any = True
+            elif diff < -min_progress:
+                return False  # Worsened on this target
+        return improved_any
 
     def _should_accept(
         self,
@@ -707,16 +851,12 @@ class EvolutionLoop:
     ) -> tuple[bool, str]:
         """Smarter acceptance criterion. Decision cascade:
 
-        1. If strictly improved on target metric → ("improved")
-        2. If pareto_metrics set and Pareto-improving → ("pareto_improved")
-        3. If exploration_budget > 0 and temperature allows → ("exploration")
-        4. → ("not_improved")
+        1. If improved on target(s) → ("improved")
+        2. If exploration_budget > 0 and temperature allows → ("exploration")
+        3. → ("not_improved")
         """
         if self._is_improved(before, after):
             return True, "improved"
-
-        if self.config.pareto_metrics and self._is_pareto_improving(before, after):
-            return True, "pareto_improved"
 
         if exploration_remaining > 0 and temperature > 0:
             target = self.config.optimization_target
@@ -732,43 +872,6 @@ class EvolutionLoop:
                 return True, "exploration"
 
         return False, "not_improved"
-
-    def _is_pareto_improving(
-        self,
-        before: dict[str, float],
-        after: dict[str, float],
-    ) -> bool:
-        """True if after is better on at least one pareto_metric without being
-        worse on any constraint metric."""
-        if not self.config.pareto_metrics:
-            return False
-
-        improved_any = False
-        min_progress = self.config.min_progress
-
-        for metric in self.config.pareto_metrics:
-            before_val = before.get(metric, 0)
-            after_val = after.get(metric, 0)
-            diff = after_val - before_val
-            if diff > min_progress:
-                improved_any = True
-            elif diff < -min_progress:
-                return False  # Worse on a Pareto metric
-
-        # Also check hard constraint metrics aren't violated
-        for constraint in self.config.hard_constraints:
-            c_metric = constraint.get("metric", "")
-            c_op = constraint.get("op", "<=")
-            c_value = float(constraint.get("value", 0))
-            actual = after.get(c_metric)
-            if actual is None:
-                continue
-            if c_op == "<=" and actual > c_value:
-                return False
-            elif c_op == ">=" and actual < c_value:
-                return False
-
-        return improved_any
 
     def _detect_convergence(
         self,
@@ -807,6 +910,8 @@ class EvolutionLoop:
         Returns: (accepted_files, metrics_after)
         If metrics_after is None, caller should fall back to all-or-nothing.
         """
+        patch_path: str | None = None
+        stash_pushed = False
         try:
             changed_files = self._get_changed_files()
             if len(changed_files) <= 1:
@@ -827,11 +932,12 @@ class EvolutionLoop:
                 f.write(full_patch)
                 patch_path = f.name
 
-            # Stash changes
+            # Stash changes (keeps them safe until we're done)
             subprocess.run(
                 ["git", "stash"],
                 capture_output=True, timeout=10,
             )
+            stash_pushed = True
 
             # Test each file independently
             file_results: list[tuple[str, dict[str, float], bool]] = []
@@ -865,15 +971,6 @@ class EvolutionLoop:
                     )
                     continue
 
-            # Pop stash
-            subprocess.run(
-                ["git", "stash", "pop"],
-                capture_output=True, timeout=10,
-            )
-
-            # Clean up patch file
-            Path(patch_path).unlink(missing_ok=True)
-
             if not file_results:
                 return (changed_files, None)
 
@@ -898,19 +995,12 @@ class EvolutionLoop:
             if not accepted_files:
                 return ([], None)
 
-            # Reset and apply accepted subset
+            # Reset and apply accepted subset from the patch file
             subprocess.run(
                 ["git", "checkout", "--", "."],
                 capture_output=True, timeout=10,
             )
 
-            # Save full diff again and apply subset
-            diff_result2 = subprocess.run(
-                ["git", "stash", "show", "-p"],
-                capture_output=True, text=True, timeout=10,
-            )
-            # Actually, we popped stash already, so we need to re-stash
-            # Let's apply accepted files from the patch
             for file_path in accepted_files:
                 subprocess.run(
                     ["git", "apply", f"--include={file_path}", patch_path],
@@ -957,6 +1047,15 @@ class EvolutionLoop:
 
         except Exception:
             return ([], None)
+        finally:
+            # Always clean up: drop stash and remove patch file
+            if stash_pushed:
+                subprocess.run(
+                    ["git", "stash", "drop"],
+                    capture_output=True, timeout=10,
+                )
+            if patch_path is not None:
+                Path(patch_path).unlink(missing_ok=True)
 
     def _rollback(self) -> None:
         """Discard uncommitted changes."""

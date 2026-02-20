@@ -94,6 +94,8 @@ class EvolutionMemory:
     entries: list[MemoryEntry] = field(default_factory=list)
     best_metrics: dict[str, float] = field(default_factory=dict)
     best_iteration: int = 0
+    target_metric: str = "sensitivity"
+    target_direction: str = "max"
 
     def add_entry(self, entry: MemoryEntry) -> None:
         """Append entry, update best_metrics/best_iteration if accepted and improved."""
@@ -103,10 +105,13 @@ class EvolutionMemory:
                 self.best_metrics = dict(entry.metrics_after)
                 self.best_iteration = entry.iteration
             else:
-                # Update best if sensitivity improved (or first accepted)
-                current_best = self.best_metrics.get("sensitivity", 0)
-                new_val = entry.metrics_after.get("sensitivity", 0)
-                if new_val >= current_best:
+                current_best = self.best_metrics.get(self.target_metric, 0)
+                new_val = entry.metrics_after.get(self.target_metric, 0)
+                if self.target_direction == "min":
+                    is_better = new_val <= current_best
+                else:
+                    is_better = new_val >= current_best
+                if is_better:
                     self.best_metrics = dict(entry.metrics_after)
                     self.best_iteration = entry.iteration
 
@@ -131,6 +136,8 @@ class EvolutionMemory:
             "entries": [e.to_dict() for e in self.entries],
             "best_metrics": self.best_metrics,
             "best_iteration": self.best_iteration,
+            "target_metric": self.target_metric,
+            "target_direction": self.target_direction,
         }
 
     @classmethod
@@ -139,6 +146,8 @@ class EvolutionMemory:
             entries=[MemoryEntry.from_dict(e) for e in data.get("entries", [])],
             best_metrics=data.get("best_metrics", {}),
             best_iteration=data.get("best_iteration", 0),
+            target_metric=data.get("target_metric", "sensitivity"),
+            target_direction=data.get("target_direction", "max"),
         )
         return mem
 
@@ -272,3 +281,4 @@ def compute_parameter_diff(
             changes.append(ParameterChange(path=path, old_value=old_val, new_value=new_val))
 
     return changes
+
