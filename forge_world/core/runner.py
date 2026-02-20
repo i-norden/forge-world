@@ -64,7 +64,8 @@ class PerformanceMetrics:
 
 
 def _compute_performance_metrics(
-    latencies: list[float], total_time_ms: float,
+    latencies: list[float],
+    total_time_ms: float,
 ) -> PerformanceMetrics | None:
     """Compute performance metrics from a list of latencies (in ms).
 
@@ -260,9 +261,7 @@ class AggregateMetrics:
             "min_sensitivity": round(self.min_sensitivity, 4),
             "worst_case_fpr": round(self.worst_case_fpr, 4),
             "mean_f1": round(self.mean_f1, 4),
-            "item_stability": {
-                k: round(v, 4) for k, v in sorted(self.item_stability.items())
-            },
+            "item_stability": {k: round(v, 4) for k, v in sorted(self.item_stability.items())},
         }
 
 
@@ -530,9 +529,7 @@ class BenchmarkRunner:
                 raise ValueError("Dataset does not support tiers.")
             tier_map = self.dataset.tiers()
             if tier not in tier_map:
-                raise ValueError(
-                    f"Unknown tier '{tier}'. Available: {sorted(tier_map.keys())}"
-                )
+                raise ValueError(f"Unknown tier '{tier}'. Available: {sorted(tier_map.keys())}")
             allowed = set(tier_map[tier])
             items = [item for item in items if item.category in allowed]
 
@@ -613,7 +610,9 @@ class BenchmarkRunner:
             if hasattr(config, "model_dump"):
                 config_snapshot = config.model_dump()
             elif hasattr(config, "__dict__"):
-                config_snapshot = {k: v for k, v in config.__dict__.items() if not k.startswith("_")}
+                config_snapshot = {
+                    k: v for k, v in config.__dict__.items() if not k.startswith("_")
+                }
             else:
                 config_snapshot = {"raw": str(config)}
         except Exception:
@@ -658,13 +657,9 @@ class BenchmarkRunner:
         config = self.pipeline.get_config()
         config_hash = _hash_config(config)
 
-        exploration_seeds = _derive_exploration_seeds(
-            run_id, seed_strategy.n_exploration_seeds
-        )
+        exploration_seeds = _derive_exploration_seeds(run_id, seed_strategy.n_exploration_seeds)
 
-        all_seeds: list[tuple[int, str]] = [
-            (s, "stable") for s in seed_strategy.stable_seeds
-        ] + [
+        all_seeds: list[tuple[int, str]] = [(s, "stable") for s in seed_strategy.stable_seeds] + [
             (s, "exploration") for s in exploration_seeds
         ]
 

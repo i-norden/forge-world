@@ -75,8 +75,7 @@ class MemoryEntry:
             timestamp=data["timestamp"],
             files_changed=data.get("files_changed", []),
             parameter_changes=[
-                ParameterChange.from_dict(pc)
-                for pc in data.get("parameter_changes", [])
+                ParameterChange.from_dict(pc) for pc in data.get("parameter_changes", [])
             ],
             metrics_before=data.get("metrics_before", {}),
             metrics_after=data.get("metrics_after"),
@@ -281,4 +280,3 @@ def compute_parameter_diff(
             changes.append(ParameterChange(path=path, old_value=old_val, new_value=new_val))
 
     return changes
-

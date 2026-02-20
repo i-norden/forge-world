@@ -17,7 +17,6 @@ from forge_world.core.runner import (
     MultiBenchmarkReport,
     PerformanceMetrics,
     SeedStrategy,
-    _compute_aggregate_metrics,
     _compute_performance_metrics,
     _derive_exploration_seeds,
 )
@@ -90,7 +89,9 @@ class FakeAggregator:
 class FakeDataset:
     """Dataset that returns fixed items plus optional seed-sampled items."""
 
-    def __init__(self, items: list[LabeledItem], seed_items: dict[int, list[LabeledItem]] | None = None):
+    def __init__(
+        self, items: list[LabeledItem], seed_items: dict[int, list[LabeledItem]] | None = None
+    ):
         self._items = items
         self._seed_items = seed_items or {}
 
@@ -502,7 +503,7 @@ class TestRunMulti:
             rules=FakeRules(),
         )
         # 2 stable seeds (42 and 137), no exploration
-        multi = runner.run_multi(SeedStrategy(stable_seeds=[42, 137], n_exploration_seeds=0))
+        runner.run_multi(SeedStrategy(stable_seeds=[42, 137], n_exploration_seeds=0))
 
         # 5 fixed items analyzed once (cached) + 2 seed-42 items + 1 seed-137 item = 8
         # Without caching it would be (5+2) + (5+1) = 13
@@ -555,6 +556,7 @@ class TestTierFiltering:
             rules=FakeRules(),
         )
         import pytest
+
         with pytest.raises(ValueError, match="Unknown tier"):
             runner.run(tier="nonexistent")
 
@@ -567,6 +569,7 @@ class TestTierFiltering:
             rules=FakeRules(),
         )
         import pytest
+
         with pytest.raises(ValueError, match="does not support tiers"):
             runner.run(tier="smoke")
 
@@ -638,7 +641,7 @@ class TestDiskCacheIntegration:
                 rules=FakeRules(),
                 analysis_cache=cache,
             )
-            report = runner.run()
+            runner.run()
             # Cache should have entries (for items that produced findings)
             assert cache.stats["misses"] > 0  # First run = all misses
 
@@ -698,8 +701,10 @@ class TestDiskCacheIntegration:
             pipeline_a = FakePipeline(config={"threshold": 0.5})
             pipeline_a.analyze = counting_analyze.__get__(pipeline_a, FakePipeline)
             runner_a = BenchmarkRunner(
-                pipeline=pipeline_a, aggregator=FakeAggregator(),
-                dataset=FakeDataset(items), rules=FakeRules(),
+                pipeline=pipeline_a,
+                aggregator=FakeAggregator(),
+                dataset=FakeDataset(items),
+                rules=FakeRules(),
                 analysis_cache=cache,
             )
             runner_a.run()
@@ -709,8 +714,10 @@ class TestDiskCacheIntegration:
             pipeline_b = FakePipeline(config={"threshold": 0.3})
             pipeline_b.analyze = counting_analyze.__get__(pipeline_b, FakePipeline)
             runner_b = BenchmarkRunner(
-                pipeline=pipeline_b, aggregator=FakeAggregator(),
-                dataset=FakeDataset(items), rules=FakeRules(),
+                pipeline=pipeline_b,
+                aggregator=FakeAggregator(),
+                dataset=FakeDataset(items),
+                rules=FakeRules(),
                 analysis_cache=cache,
             )
             runner_b.run()
@@ -831,11 +838,15 @@ class TestBenchmarkRunnerPerformance:
         """BenchmarkRunner.run() should produce performance metrics."""
         items = [
             LabeledItem(
-                id="item1", category="test", expected_label="findings",
+                id="item1",
+                category="test",
+                expected_label="findings",
                 data={"id": "item1", "score": 0.9, "method": "test"},
             ),
             LabeledItem(
-                id="item2", category="clean", expected_label="clean",
+                id="item2",
+                category="clean",
+                expected_label="clean",
                 data={"id": "item2", "score": 0.1, "method": "test"},
             ),
         ]
@@ -855,11 +866,15 @@ class TestBenchmarkRunnerPerformance:
         """Items served from cache should NOT be included in latency stats."""
         items = [
             LabeledItem(
-                id="item1", category="test", expected_label="findings",
+                id="item1",
+                category="test",
+                expected_label="findings",
                 data={"id": "item1", "score": 0.9, "method": "test"},
             ),
             LabeledItem(
-                id="item2", category="clean", expected_label="clean",
+                id="item2",
+                category="clean",
+                expected_label="clean",
                 data={"id": "item2", "score": 0.1, "method": "test"},
             ),
         ]
@@ -885,7 +900,9 @@ class TestBenchmarkRunnerPerformance:
         """Performance metrics should appear in report.to_dict()."""
         items = [
             LabeledItem(
-                id="item1", category="test", expected_label="findings",
+                id="item1",
+                category="test",
+                expected_label="findings",
                 data={"id": "item1", "score": 0.9, "method": "test"},
             ),
         ]

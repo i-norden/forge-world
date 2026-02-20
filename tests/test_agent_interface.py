@@ -27,7 +27,12 @@ def _make_report() -> BenchmarkReport:
             converging_evidence=True,
             findings=[
                 {"method": "ela", "confidence": 0.8, "severity": "high", "title": "ELA anomaly"},
-                {"method": "clone_detection", "confidence": 0.9, "severity": "high", "title": "Clone"},
+                {
+                    "method": "clone_detection",
+                    "confidence": 0.9,
+                    "severity": "high",
+                    "title": "Clone",
+                },
             ],
             methods_flagged=["ela", "clone_detection"],
         ),

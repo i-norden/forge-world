@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from forge_world.core.evolve import (
     EvolutionConfig,
     EvolutionLoop,
@@ -31,38 +29,77 @@ def _make_report(pass_rate: float = 0.8, sensitivity: float = 0.8, fpr: float = 
 
     results = []
     for i in range(tp):
-        results.append(ItemResult(
-            item_id=f"findings_{i}", category="test", expected_label="findings",
-            passed=True, risk_level="high", confidence=0.9,
-            converging_evidence=False, findings=[], methods_flagged=[],
-        ))
+        results.append(
+            ItemResult(
+                item_id=f"findings_{i}",
+                category="test",
+                expected_label="findings",
+                passed=True,
+                risk_level="high",
+                confidence=0.9,
+                converging_evidence=False,
+                findings=[],
+                methods_flagged=[],
+            )
+        )
     for i in range(fn):
-        results.append(ItemResult(
-            item_id=f"missed_{i}", category="test", expected_label="findings",
-            passed=False, risk_level="low", confidence=0.2,
-            converging_evidence=False, findings=[], methods_flagged=[],
-        ))
+        results.append(
+            ItemResult(
+                item_id=f"missed_{i}",
+                category="test",
+                expected_label="findings",
+                passed=False,
+                risk_level="low",
+                confidence=0.2,
+                converging_evidence=False,
+                findings=[],
+                methods_flagged=[],
+            )
+        )
     for i in range(tn):
-        results.append(ItemResult(
-            item_id=f"clean_{i}", category="clean", expected_label="clean",
-            passed=True, risk_level="clean", confidence=0.0,
-            converging_evidence=False, findings=[], methods_flagged=[],
-        ))
+        results.append(
+            ItemResult(
+                item_id=f"clean_{i}",
+                category="clean",
+                expected_label="clean",
+                passed=True,
+                risk_level="clean",
+                confidence=0.0,
+                converging_evidence=False,
+                findings=[],
+                methods_flagged=[],
+            )
+        )
     for i in range(fp):
-        results.append(ItemResult(
-            item_id=f"fp_{i}", category="clean", expected_label="clean",
-            passed=False, risk_level="high", confidence=0.8,
-            converging_evidence=False, findings=[], methods_flagged=[],
-        ))
+        results.append(
+            ItemResult(
+                item_id=f"fp_{i}",
+                category="clean",
+                expected_label="clean",
+                passed=False,
+                risk_level="high",
+                confidence=0.8,
+                converging_evidence=False,
+                findings=[],
+                methods_flagged=[],
+            )
+        )
 
     cm = ConfusionMatrix(
-        true_positives=tp, true_negatives=tn,
-        false_positives=fp, false_negatives=fn,
+        true_positives=tp,
+        true_negatives=tn,
+        false_positives=fp,
+        false_negatives=fn,
     )
     return BenchmarkReport(
-        run_id="test", timestamp="2025-01-01T00:00:00Z", git_sha="abc",
-        config_hash="cfg", item_results=results, confusion_matrix=cm,
-        category_metrics=[], method_metrics={},
+        run_id="test",
+        timestamp="2025-01-01T00:00:00Z",
+        git_sha="abc",
+        config_hash="cfg",
+        item_results=results,
+        confusion_matrix=cm,
+        category_metrics=[],
+        method_metrics={},
     )
 
 
@@ -322,7 +359,9 @@ class TestEvolutionResult:
     def test_to_markdown(self):
         result = EvolutionResult(
             iterations=[
-                IterationResult(iteration=1, had_changes=True, constraint_violated=False, accepted=True),
+                IterationResult(
+                    iteration=1, had_changes=True, constraint_violated=False, accepted=True
+                ),
                 IterationResult(iteration=2, had_changes=False, constraint_violated=False),
             ],
             total_iterations=2,
@@ -390,9 +429,7 @@ class TestShouldAccept:
             optimization_targets=[{"metric": "sensitivity", "direction": "max"}],
         )
         loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
-        accept, reason = loop._should_accept(
-            {"sensitivity": 0.8}, {"sensitivity": 0.85}, 1, 1.0, 0
-        )
+        accept, reason = loop._should_accept({"sensitivity": 0.8}, {"sensitivity": 0.85}, 1, 1.0, 0)
         assert accept is True
         assert reason == "improved"
 
@@ -403,9 +440,7 @@ class TestShouldAccept:
             exploration_budget=0,
         )
         loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
-        accept, reason = loop._should_accept(
-            {"sensitivity": 0.8}, {"sensitivity": 0.75}, 1, 1.0, 0
-        )
+        accept, reason = loop._should_accept({"sensitivity": 0.8}, {"sensitivity": 0.75}, 1, 1.0, 0)
         assert accept is False
         assert reason == "not_improved"
 
@@ -434,9 +469,7 @@ class TestShouldAccept:
         )
         loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
         # Budget is 0, should reject even though config has budget
-        accept, reason = loop._should_accept(
-            {"sensitivity": 0.8}, {"sensitivity": 0.75}, 1, 1.0, 0
-        )
+        accept, reason = loop._should_accept({"sensitivity": 0.8}, {"sensitivity": 0.75}, 1, 1.0, 0)
         assert accept is False
         assert reason == "not_improved"
 
@@ -451,10 +484,13 @@ class TestShouldAccept:
         )
         loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
         # sensitivity improved, latency same
-        assert loop._is_improved(
-            {"sensitivity": 0.8, "latency_mean_ms": 100},
-            {"sensitivity": 0.85, "latency_mean_ms": 100},
-        ) is True
+        assert (
+            loop._is_improved(
+                {"sensitivity": 0.8, "latency_mean_ms": 100},
+                {"sensitivity": 0.85, "latency_mean_ms": 100},
+            )
+            is True
+        )
 
     def test_multi_target_worsened_rejected(self):
         """Multi-target: improved on one but worsened on other → rejected."""
@@ -467,10 +503,13 @@ class TestShouldAccept:
         )
         loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
         # sensitivity improved, but latency worsened significantly
-        assert loop._is_improved(
-            {"sensitivity": 0.8, "latency_mean_ms": 100},
-            {"sensitivity": 0.85, "latency_mean_ms": 200},
-        ) is False
+        assert (
+            loop._is_improved(
+                {"sensitivity": 0.8, "latency_mean_ms": 100},
+                {"sensitivity": 0.85, "latency_mean_ms": 200},
+            )
+            is False
+        )
 
     def test_multi_target_all_same_not_improved(self):
         """Multi-target: no change on any → not improved."""
@@ -482,10 +521,13 @@ class TestShouldAccept:
             ],
         )
         loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
-        assert loop._is_improved(
-            {"sensitivity": 0.8, "f1": 0.75},
-            {"sensitivity": 0.8, "f1": 0.75},
-        ) is False
+        assert (
+            loop._is_improved(
+                {"sensitivity": 0.8, "f1": 0.75},
+                {"sensitivity": 0.8, "f1": 0.75},
+            )
+            is False
+        )
 
     def test_should_accept_multi_target(self):
         """_should_accept with multi-target improvement."""
@@ -500,7 +542,9 @@ class TestShouldAccept:
         accept, reason = loop._should_accept(
             {"sensitivity": 0.8, "latency_mean_ms": 100},
             {"sensitivity": 0.85, "latency_mean_ms": 100},
-            1, 1.0, 0,
+            1,
+            1.0,
+            0,
         )
         assert accept is True
         assert reason == "improved"
@@ -710,8 +754,9 @@ class TestProposalErrorRecording:
                 if mem_data.get("entries"):
                     entry = mem_data["entries"][0]
                     # The error should appear in agent_reasoning
-                    assert "PROPOSAL ERROR" in entry.get("agent_reasoning", "") or \
-                           "Testing error handling" in entry.get("agent_reasoning", "")
+                    assert "PROPOSAL ERROR" in entry.get(
+                        "agent_reasoning", ""
+                    ) or "Testing error handling" in entry.get("agent_reasoning", "")
 
 
 class TestAutoTuneConfig:
@@ -883,5 +928,3 @@ class TestBackwardCompat:
         config = EvolutionConfig(agent_command="echo test")
         assert config.optimization_target == {"metric": "sensitivity", "direction": "max"}
         assert config.optimization_targets == [{"metric": "sensitivity", "direction": "max"}]
-
-

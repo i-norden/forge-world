@@ -285,9 +285,7 @@ class SnapshotManager:
         """
         snapshot = self.load(name)
         if snapshot is None:
-            raise FileNotFoundError(
-                f"No snapshot '{name}' found. Run 'forge lock' first."
-            )
+            raise FileNotFoundError(f"No snapshot '{name}' found. Run 'forge lock' first.")
 
         failed: set[str] = set()
 
@@ -308,9 +306,7 @@ class SnapshotManager:
         """List available snapshot names."""
         if not self.snapshots_dir.exists():
             return []
-        return sorted(
-            p.stem for p in self.snapshots_dir.glob("*.json")
-        )
+        return sorted(p.stem for p in self.snapshots_dir.glob("*.json"))
 
     def check(
         self,
@@ -334,9 +330,7 @@ class SnapshotManager:
             return self._check_multi(report, baseline)
         return self._check_single(report, baseline)
 
-    def _check_single(
-        self, report: BenchmarkReport, baseline: Snapshot
-    ) -> RegressionReport:
+    def _check_single(self, report: BenchmarkReport, baseline: Snapshot) -> RegressionReport:
         """Compare a single-seed report against baseline (legacy path)."""
         regressions, improvements, new_fps = self._compare_items(
             report.item_results, baseline.item_outcomes
@@ -353,9 +347,7 @@ class SnapshotManager:
             current_pass_rate=f"{report.pass_count}/{report.total_count}",
         )
 
-    def _check_multi(
-        self, report: MultiBenchmarkReport, baseline: Snapshot
-    ) -> RegressionReport:
+    def _check_multi(self, report: MultiBenchmarkReport, baseline: Snapshot) -> RegressionReport:
         """Compare a multi-seed report against baseline.
 
         Stable seeds: per-seed item-level regression check.
@@ -414,7 +406,9 @@ class SnapshotManager:
 
         # Current pass rate summary
         am = report.aggregate_metrics
-        current_pr = f"{am.mean_pass_rate:.1%} (range: {am.min_pass_rate:.1%}-{am.max_pass_rate:.1%})"
+        current_pr = (
+            f"{am.mean_pass_rate:.1%} (range: {am.min_pass_rate:.1%}-{am.max_pass_rate:.1%})"
+        )
 
         return RegressionReport(
             baseline_name=baseline.name,

@@ -49,7 +49,12 @@ class EvolutionConfig:
     @property
     def optimization_target(self) -> dict[str, Any]:
         """Primary optimization target (first in list). Backward compat."""
-        return self.optimization_targets[0] if self.optimization_targets else {"metric": "sensitivity", "direction": "max"}
+        return (
+            self.optimization_targets[0]
+            if self.optimization_targets
+            else {"metric": "sensitivity", "direction": "max"}
+        )
+
     convergence_patience: int = 3
     context_file: str = ".forge-world/evolution-context.md"
 
@@ -272,8 +277,7 @@ class EvolutionLoop:
                 try:
                     if hasattr(report, "stable_reports") and report.stable_reports:
                         failing = [
-                            r for r in report.stable_reports[0].report.item_results
-                            if not r.passed
+                            r for r in report.stable_reports[0].report.item_results if not r.passed
                         ]
                     elif hasattr(report, "item_results"):
                         failing = [r for r in report.item_results if not r.passed]
@@ -316,8 +320,16 @@ class EvolutionLoop:
                 agent_ok = self._invoke_agent()
             except Exception:
                 self._record_memory_entry(
-                    memory, i, config_before, [], metrics_before,
-                    None, False, "agent_error", [], "",
+                    memory,
+                    i,
+                    config_before,
+                    [],
+                    metrics_before,
+                    None,
+                    False,
+                    "agent_error",
+                    [],
+                    "",
                 )
                 iteration.rollback_reason = "agent_error"
                 result.iterations.append(iteration)
@@ -328,8 +340,16 @@ class EvolutionLoop:
 
             if not agent_ok:
                 self._record_memory_entry(
-                    memory, i, config_before, [], metrics_before,
-                    None, False, "agent_error", [], "",
+                    memory,
+                    i,
+                    config_before,
+                    [],
+                    metrics_before,
+                    None,
+                    False,
+                    "agent_error",
+                    [],
+                    "",
                 )
                 iteration.rollback_reason = "agent_error"
                 result.iterations.append(iteration)
@@ -386,8 +406,16 @@ class EvolutionLoop:
 
             if not has_changes:
                 self._record_memory_entry(
-                    memory, i, config_before, [], metrics_before,
-                    None, False, "no_changes", [], agent_reasoning,
+                    memory,
+                    i,
+                    config_before,
+                    [],
+                    metrics_before,
+                    None,
+                    False,
+                    "no_changes",
+                    [],
+                    agent_reasoning,
                 )
                 no_improvement_count += 1
                 iteration.rollback_reason = "no_changes"
@@ -404,9 +432,7 @@ class EvolutionLoop:
             if self.config.decompose_changes and has_file_changes:
                 changed_files = self._get_changed_files()
                 if len(changed_files) > 1:
-                    accepted_files, decomposed_metrics = self._decompose_and_test(
-                        metrics_before
-                    )
+                    accepted_files, decomposed_metrics = self._decompose_and_test(metrics_before)
                     if decomposed_metrics is not None:
                         decomposed = True
                         metrics_after = decomposed_metrics
@@ -424,8 +450,16 @@ class EvolutionLoop:
                             config_after = self._capture_config()
                             param_changes = compute_parameter_diff(config_before, config_after)
                             self._record_memory_entry(
-                                memory, i, config_before, accepted_files, metrics_before,
-                                metrics_after, False, reason, violations, agent_reasoning,
+                                memory,
+                                i,
+                                config_before,
+                                accepted_files,
+                                metrics_before,
+                                metrics_after,
+                                False,
+                                reason,
+                                violations,
+                                agent_reasoning,
                                 param_changes=param_changes,
                             )
                             result.iterations.append(iteration)
@@ -438,8 +472,11 @@ class EvolutionLoop:
                             continue
 
                         accept, reason = self._should_accept(
-                            metrics_before, metrics_after, i,
-                            temperature, exploration_remaining,
+                            metrics_before,
+                            metrics_after,
+                            i,
+                            temperature,
+                            exploration_remaining,
                         )
                         iteration.improved = self._is_improved(metrics_before, metrics_after)
                         iteration.accepted = accept
@@ -452,8 +489,16 @@ class EvolutionLoop:
                                 exploration_remaining -= 1
                             self._commit_changes(i, metrics_before, metrics_after)
                             self._record_memory_entry(
-                                memory, i, config_before, accepted_files, metrics_before,
-                                metrics_after, True, reason, [], agent_reasoning,
+                                memory,
+                                i,
+                                config_before,
+                                accepted_files,
+                                metrics_before,
+                                metrics_after,
+                                True,
+                                reason,
+                                [],
+                                agent_reasoning,
                                 param_changes=param_changes,
                             )
                             # Auto-tune after acceptance
@@ -467,8 +512,16 @@ class EvolutionLoop:
                             if old_config:
                                 rollback_proposals(self.runner.pipeline, old_config)
                             self._record_memory_entry(
-                                memory, i, config_before, accepted_files, metrics_before,
-                                metrics_after, False, reason, [], agent_reasoning,
+                                memory,
+                                i,
+                                config_before,
+                                accepted_files,
+                                metrics_before,
+                                metrics_after,
+                                False,
+                                reason,
+                                [],
+                                agent_reasoning,
                                 param_changes=param_changes,
                             )
                             no_improvement_count += 1
@@ -478,7 +531,9 @@ class EvolutionLoop:
                             self.on_iteration_complete(i, iteration)
 
                         metric_history.append(
-                            metrics_after.get(self.config.optimization_target.get("metric", "sensitivity"), 0)
+                            metrics_after.get(
+                                self.config.optimization_target.get("metric", "sensitivity"), 0
+                            )
                         )
                         # Only decay temperature when exploration budget is consumed
                         if reason == "exploration":
@@ -517,8 +572,16 @@ class EvolutionLoop:
                     config_after = self._capture_config()
                     param_changes = compute_parameter_diff(config_before, config_after)
                     self._record_memory_entry(
-                        memory, i, config_before, changed_files, metrics_before,
-                        metrics_after, False, reason, violations, agent_reasoning,
+                        memory,
+                        i,
+                        config_before,
+                        changed_files,
+                        metrics_before,
+                        metrics_after,
+                        False,
+                        reason,
+                        violations,
+                        agent_reasoning,
                         param_changes=param_changes,
                     )
                     result.iterations.append(iteration)
@@ -532,8 +595,11 @@ class EvolutionLoop:
 
                 # 12. Smart acceptance
                 accept, reason = self._should_accept(
-                    metrics_before, metrics_after, i,
-                    temperature, exploration_remaining,
+                    metrics_before,
+                    metrics_after,
+                    i,
+                    temperature,
+                    exploration_remaining,
                 )
                 iteration.improved = self._is_improved(metrics_before, metrics_after)
                 iteration.accepted = accept
@@ -547,8 +613,16 @@ class EvolutionLoop:
                         exploration_remaining -= 1
                     self._commit_changes(i, metrics_before, metrics_after)
                     self._record_memory_entry(
-                        memory, i, config_before, changed_files, metrics_before,
-                        metrics_after, True, reason, [], agent_reasoning,
+                        memory,
+                        i,
+                        config_before,
+                        changed_files,
+                        metrics_before,
+                        metrics_after,
+                        True,
+                        reason,
+                        [],
+                        agent_reasoning,
                         param_changes=param_changes,
                     )
                     # Auto-tune after acceptance
@@ -562,8 +636,16 @@ class EvolutionLoop:
                     if old_config:
                         rollback_proposals(self.runner.pipeline, old_config)
                     self._record_memory_entry(
-                        memory, i, config_before, changed_files, metrics_before,
-                        metrics_after, False, reason, [], agent_reasoning,
+                        memory,
+                        i,
+                        config_before,
+                        changed_files,
+                        metrics_before,
+                        metrics_after,
+                        False,
+                        reason,
+                        [],
+                        agent_reasoning,
                         param_changes=param_changes,
                     )
                     no_improvement_count += 1
@@ -574,7 +656,9 @@ class EvolutionLoop:
 
                 # 14. Track metric history and temperature
                 metric_history.append(
-                    metrics_after.get(self.config.optimization_target.get("metric", "sensitivity"), 0)
+                    metrics_after.get(
+                        self.config.optimization_target.get("metric", "sensitivity"), 0
+                    )
                 )
                 # Only decay temperature when exploration budget is consumed
                 if reason == "exploration":
@@ -610,6 +694,7 @@ class EvolutionLoop:
             try:
                 import hashlib
                 import json
+
                 current_config = self.runner.pipeline.get_config()
                 current_hash = hashlib.sha256(
                     json.dumps(current_config, sort_keys=True, default=str).encode()
@@ -634,7 +719,9 @@ class EvolutionLoop:
             return None
 
     def _maybe_auto_tune(
-        self, iteration: int, current_metrics: dict[str, float],
+        self,
+        iteration: int,
+        current_metrics: dict[str, float],
     ) -> dict[str, float]:
         """Run Optuna auto-tuning if enabled. Returns updated metrics."""
         if not self.config.auto_tune or not self.pipeline_config_schema:
@@ -648,6 +735,7 @@ class EvolutionLoop:
 
         try:
             from forge_world.core.tuner import apply_best_params
+
             old = apply_best_params(self.runner.pipeline, tuner_result)
             tuned_report = self._run_bench()
             tuned_metrics = _extract_metrics(tuned_report)
@@ -665,6 +753,7 @@ class EvolutionLoop:
         try:
             from forge_world.core.tuner import TunerConfig, run_tuning
             from forge_world.core.sensitivity import walk_numeric_parameters
+
             schema_params = walk_numeric_parameters(self.pipeline_config_schema)
             if not schema_params:
                 return None
@@ -737,11 +826,15 @@ class EvolutionLoop:
 
         if seed is not None:
             return self.runner.run(
-                seed=seed, sample_size=sample_size, tier=tier,
+                seed=seed,
+                sample_size=sample_size,
+                tier=tier,
             )
         elif seed_strategy is not None:
             return self.runner.run_multi(
-                seed_strategy, sample_size=sample_size, tier=tier,
+                seed_strategy,
+                sample_size=sample_size,
+                tier=tier,
             )
         else:
             return self.runner.run(sample_size=sample_size, tier=tier)
@@ -754,9 +847,7 @@ class EvolutionLoop:
 
     def _invoke_agent(self) -> bool:
         """Invoke the agent subprocess. Returns True if successful."""
-        cmd = self.config.agent_command.replace(
-            "{context_file}", self.config.context_file
-        )
+        cmd = self.config.agent_command.replace("{context_file}", self.config.context_file)
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         return result.returncode == 0
 
@@ -764,7 +855,9 @@ class EvolutionLoop:
         """Check if git working tree has changes."""
         result = subprocess.run(
             ["git", "diff", "--stat"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         return bool(result.stdout.strip())
 
@@ -773,7 +866,9 @@ class EvolutionLoop:
         try:
             result = subprocess.run(
                 ["git", "diff", "--name-only"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             return [f for f in result.stdout.strip().split("\n") if f]
         except Exception:
@@ -903,7 +998,8 @@ class EvolutionLoop:
         return False, ""
 
     def _decompose_and_test(
-        self, metrics_before: dict[str, float],
+        self,
+        metrics_before: dict[str, float],
     ) -> tuple[list[str], dict[str, float] | None]:
         """Test multi-file changes independently, accept the best subset.
 
@@ -920,22 +1016,23 @@ class EvolutionLoop:
             # Save full diff
             diff_result = subprocess.run(
                 ["git", "diff"],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
             if diff_result.returncode != 0:
                 return (changed_files, None)
 
             full_patch = diff_result.stdout
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".patch", delete=False
-            ) as f:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".patch", delete=False) as f:
                 f.write(full_patch)
                 patch_path = f.name
 
             # Stash changes (keeps them safe until we're done)
             subprocess.run(
                 ["git", "stash"],
-                capture_output=True, timeout=10,
+                capture_output=True,
+                timeout=10,
             )
             stash_pushed = True
 
@@ -946,7 +1043,8 @@ class EvolutionLoop:
                     # Apply only this file's changes
                     apply_result = subprocess.run(
                         ["git", "apply", f"--include={file_path}", patch_path],
-                        capture_output=True, timeout=10,
+                        capture_output=True,
+                        timeout=10,
                     )
                     if apply_result.returncode != 0:
                         continue
@@ -962,12 +1060,14 @@ class EvolutionLoop:
                     # Reset
                     subprocess.run(
                         ["git", "checkout", "--", "."],
-                        capture_output=True, timeout=10,
+                        capture_output=True,
+                        timeout=10,
                     )
                 except Exception:
                     subprocess.run(
                         ["git", "checkout", "--", "."],
-                        capture_output=True, timeout=10,
+                        capture_output=True,
+                        timeout=10,
                     )
                     continue
 
@@ -998,13 +1098,15 @@ class EvolutionLoop:
             # Reset and apply accepted subset from the patch file
             subprocess.run(
                 ["git", "checkout", "--", "."],
-                capture_output=True, timeout=10,
+                capture_output=True,
+                timeout=10,
             )
 
             for file_path in accepted_files:
                 subprocess.run(
                     ["git", "apply", f"--include={file_path}", patch_path],
-                    capture_output=True, timeout=10,
+                    capture_output=True,
+                    timeout=10,
                 )
 
             # Benchmark the combined subset
@@ -1017,7 +1119,8 @@ class EvolutionLoop:
                 # Fall back to best single file
                 subprocess.run(
                     ["git", "checkout", "--", "."],
-                    capture_output=True, timeout=10,
+                    capture_output=True,
+                    timeout=10,
                 )
                 if file_results:
                     # Find best single file
@@ -1037,7 +1140,8 @@ class EvolutionLoop:
                     if best_file:
                         subprocess.run(
                             ["git", "apply", f"--include={best_file[0]}", patch_path],
-                            capture_output=True, timeout=10,
+                            capture_output=True,
+                            timeout=10,
                         )
                         return ([best_file[0]], best_file[1])
 
@@ -1052,7 +1156,8 @@ class EvolutionLoop:
             if stash_pushed:
                 subprocess.run(
                     ["git", "stash", "drop"],
-                    capture_output=True, timeout=10,
+                    capture_output=True,
+                    timeout=10,
                 )
             if patch_path is not None:
                 Path(patch_path).unlink(missing_ok=True)
@@ -1061,7 +1166,8 @@ class EvolutionLoop:
         """Discard uncommitted changes."""
         subprocess.run(
             ["git", "checkout", "--", "."],
-            capture_output=True, timeout=10,
+            capture_output=True,
+            timeout=10,
         )
 
     def _commit_changes(
@@ -1074,12 +1180,10 @@ class EvolutionLoop:
         target = self.config.optimization_target.get("metric", "sensitivity")
         before_val = before.get(target, 0)
         after_val = after.get(target, 0)
-        msg = (
-            f"forge evolve: iteration {iteration} "
-            f"({target}: {before_val:.4f} -> {after_val:.4f})"
-        )
+        msg = f"forge evolve: iteration {iteration} ({target}: {before_val:.4f} -> {after_val:.4f})"
         subprocess.run(["git", "add", "-A"], capture_output=True, timeout=10)
         subprocess.run(
             ["git", "commit", "-m", msg],
-            capture_output=True, timeout=30,
+            capture_output=True,
+            timeout=30,
         )

@@ -27,6 +27,7 @@ def _ensure_optuna():
     """Lazy-import optuna, raising a clear error if missing."""
     try:
         import optuna  # noqa: F811
+
         return optuna
     except ImportError:
         raise ImportError(
@@ -136,7 +137,11 @@ def run_tuning(
 
     original_config = pipeline.get_config()
     if not isinstance(original_config, dict):
-        original_config = original_config.model_dump() if hasattr(original_config, "model_dump") else dict(original_config)
+        original_config = (
+            original_config.model_dump()
+            if hasattr(original_config, "model_dump")
+            else dict(original_config)
+        )
 
     targets = tuner_config.optimization_targets
     is_multi = len(targets) > 1
@@ -158,9 +163,7 @@ def run_tuning(
     journal_path = Path(tuner_config.journal_path)
     journal_path.parent.mkdir(parents=True, exist_ok=True)
 
-    storage = optuna.storages.JournalStorage(
-        optuna.storages.JournalFileStorage(str(journal_path))
-    )
+    storage = optuna.storages.JournalStorage(optuna.storages.JournalFileStorage(str(journal_path)))
 
     # Create or load study
     if is_multi:
@@ -276,12 +279,14 @@ def run_tuning(
 
             study.tell(trial, values)
 
-            all_trials.append({
-                "trial": trial.number,
-                "params": params,
-                "values": {t.get("metric", "?"): v for t, v in zip(targets, values)},
-                "violated": violated,
-            })
+            all_trials.append(
+                {
+                    "trial": trial.number,
+                    "params": params,
+                    "values": {t.get("metric", "?"): v for t, v in zip(targets, values)},
+                    "violated": violated,
+                }
+            )
 
     finally:
         # Always restore original config
@@ -294,10 +299,12 @@ def run_tuning(
         best_trials = study.best_trials
         pareto_front = []
         for bt in best_trials:
-            pareto_front.append({
-                "params": bt.params,
-                "values": {t.get("metric", "?"): v for t, v in zip(targets, bt.values)},
-            })
+            pareto_front.append(
+                {
+                    "params": bt.params,
+                    "values": {t.get("metric", "?"): v for t, v in zip(targets, bt.values)},
+                }
+            )
         # Use first Pareto solution as "best"
         if pareto_front:
             best_params = pareto_front[0]["params"]
@@ -324,7 +331,9 @@ def apply_best_params(pipeline: Any, tuner_result: TunerResult) -> dict[str, Any
     """Apply best params from tuning result. Returns old config for rollback."""
     old_config = pipeline.get_config()
     if not isinstance(old_config, dict):
-        old_config = old_config.model_dump() if hasattr(old_config, "model_dump") else dict(old_config)
+        old_config = (
+            old_config.model_dump() if hasattr(old_config, "model_dump") else dict(old_config)
+        )
     old_config_copy = dict(old_config)
 
     new_config = dict(old_config)

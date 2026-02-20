@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -79,9 +79,7 @@ class SensitivityReport:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SensitivityReport:
         return cls(
-            parameters=[
-                ParameterSensitivity.from_dict(p) for p in data["parameters"]
-            ],
+            parameters=[ParameterSensitivity.from_dict(p) for p in data["parameters"]],
             target_metric=data["target_metric"],
             baseline_value=data["baseline_value"],
             config_hash=data["config_hash"],
@@ -130,21 +128,19 @@ class SensitivityReport:
         if total_impact > 0:
             top5_impact = sum(p.impact for p in self.parameters[:5])
             pct = top5_impact / total_impact * 100
-            lines.append(f"Top {min(5, len(self.parameters))} parameters account for {pct:.0f}% of total sensitivity.")
+            lines.append(
+                f"Top {min(5, len(self.parameters))} parameters account for {pct:.0f}% of total sensitivity."
+            )
 
         negligible = [p for p in self.parameters if p.impact < 0.005]
         if negligible:
-            lines.append(
-                f"{len(negligible)} parameter(s) have negligible impact (<0.005)."
-            )
+            lines.append(f"{len(negligible)} parameter(s) have negligible impact (<0.005).")
         lines.append("")
 
         return "\n".join(lines)
 
 
-def walk_numeric_parameters(
-    schema: dict[str, Any], prefix: str = ""
-) -> list[dict[str, Any]]:
+def walk_numeric_parameters(schema: dict[str, Any], prefix: str = "") -> list[dict[str, Any]]:
     """Walk a JSON Schema and extract all numeric parameters.
 
     Returns: [{"path": "weight_ela", "type": "number", "minimum": 0.0,
@@ -157,7 +153,6 @@ def walk_numeric_parameters(
     - Integer and number types
     """
     result: list[dict[str, Any]] = []
-    defs = schema.get("$defs", schema.get("definitions", {}))
 
     def _resolve_ref(ref: str) -> dict[str, Any]:
         # Handle "#/$defs/SomeModel" or "#/definitions/SomeModel"
@@ -348,17 +343,19 @@ def compute_sensitivity(
                         constrained = True
                         constraint_detail = f"{label} causes {c_metric}={actual:.4f}"
 
-        sensitivities.append(ParameterSensitivity(
-            path=path,
-            current_value=current_value,
-            delta=delta,
-            metric_minus=metric_minus,
-            metric_plus=metric_plus,
-            impact=impact,
-            direction=direction,
-            constrained=constrained,
-            constraint_detail=constraint_detail,
-        ))
+        sensitivities.append(
+            ParameterSensitivity(
+                path=path,
+                current_value=current_value,
+                delta=delta,
+                metric_minus=metric_minus,
+                metric_plus=metric_plus,
+                impact=impact,
+                direction=direction,
+                constrained=constrained,
+                constraint_detail=constraint_detail,
+            )
+        )
 
     # Sort by impact descending
     sensitivities.sort(key=lambda s: s.impact, reverse=True)
@@ -395,5 +392,3 @@ def _run_bench(runner: Any, run_kwargs: dict[str, Any] | None = None):
         return runner.run_multi(seed_strategy, sample_size=sample_size, tier=tier)
     else:
         return runner.run(sample_size=sample_size, tier=tier)
-
-

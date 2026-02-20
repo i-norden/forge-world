@@ -17,7 +17,6 @@ from typing import Any
 
 from forge_world.core.metrics import (
     find_actionable_failure_clusters,
-    find_failure_clusters,
     find_near_misses,
 )
 from forge_world.core.runner import BenchmarkReport, MultiBenchmarkReport
@@ -203,9 +202,7 @@ class EvolutionContext:
                 "they are near the decision boundary:"
             )
             for item in self.item_stability:
-                lines.append(
-                    f"- `{item['item_id']}`: passes {item['stability']:.0%} of seeds"
-                )
+                lines.append(f"- `{item['item_id']}`: passes {item['stability']:.0%} of seeds")
             lines.append("")
 
         # 8. Category breakdown
@@ -277,9 +274,7 @@ class EvolutionContext:
                 if cluster_type in ("no_signal", "below_threshold", "single_method_capped"):
                     # Enhanced actionable cluster
                     tag = "[ACHIEVABLE]" if achievable else "[NOT ACHIEVABLE]"
-                    lines.append(
-                        f"### {cluster['pattern']} ({cluster['count']} items) {tag}"
-                    )
+                    lines.append(f"### {cluster['pattern']} ({cluster['count']} items) {tag}")
                     if cluster.get("counterfactual"):
                         lines.append(cluster["counterfactual"])
                     if cluster.get("suggestion"):
@@ -293,9 +288,7 @@ class EvolutionContext:
                 else:
                     # Standard cluster
                     methods = ", ".join(cluster.get("common_methods", []))
-                    lines.append(
-                        f"- **{cluster['pattern']}** ({cluster['count']} items)"
-                    )
+                    lines.append(f"- **{cluster['pattern']}** ({cluster['count']} items)")
                     if methods:
                         lines.append(f"  Common methods: {methods}")
             lines.append("")
@@ -375,7 +368,7 @@ class EvolutionContext:
             lines.append("### Option 1: Parameter Proposals (recommended for tuning)")
             lines.append("Create `.forge-world/parameter-proposal.json`:")
             lines.append("```json")
-            lines.append('{')
+            lines.append("{")
             lines.append('  "proposals": [')
             lines.append(
                 '    {"parameter_path": "weight_ela", "new_value": 0.75, '
@@ -385,9 +378,9 @@ class EvolutionContext:
                 '    {"parameter_path": "convergence_confidence_threshold", '
                 '"new_value": 0.55, "reasoning": "Recover near-misses"}'
             )
-            lines.append('  ],')
+            lines.append("  ],")
             lines.append('  "agent_notes": "Focusing on top-2 sensitivity parameters"')
-            lines.append('}')
+            lines.append("}")
             lines.append("```")
             lines.append("")
             lines.append("### Option 2: File Editing (for structural/algorithmic changes)")
@@ -431,13 +424,21 @@ def build_evolution_context(
 
     if isinstance(report, MultiBenchmarkReport):
         ctx = _build_multi_context(
-            report, regression, pipeline_config_schema,
-            hard_constraints, resolved_targets, sample_size,
+            report,
+            regression,
+            pipeline_config_schema,
+            hard_constraints,
+            resolved_targets,
+            sample_size,
         )
     else:
         ctx = _build_single_context(
-            report, regression, pipeline_config_schema,
-            hard_constraints, resolved_targets, sample_size,
+            report,
+            regression,
+            pipeline_config_schema,
+            hard_constraints,
+            resolved_targets,
+            sample_size,
         )
     if diagnostics:
         ctx.diagnostic_clusters = diagnostics
@@ -506,9 +507,7 @@ def _build_single_context(
     near_miss_dicts = [nm.to_dict() for nm in near_misses]
 
     # Use actionable clusters (superset of existing)
-    actionable_clusters = find_actionable_failure_clusters(
-        result_dicts, report.config_snapshot
-    )
+    actionable_clusters = find_actionable_failure_clusters(result_dicts, report.config_snapshot)
     cluster_dicts = [c.to_dict() for c in actionable_clusters]
 
     method_metrics = [me.to_dict() for me in report.method_metrics.values()]
@@ -537,7 +536,9 @@ def _build_single_context(
         current_config=report.config_snapshot,
         config_schema=pipeline_config_schema or {},
         hard_constraints=hard_constraints or [],
-        optimization_target=(optimization_targets or [{"metric": "sensitivity", "direction": "max"}])[0],
+        optimization_target=(
+            optimization_targets or [{"metric": "sensitivity", "direction": "max"}]
+        )[0],
         sample_size=sample_size,
     )
 
@@ -578,9 +579,7 @@ def _build_multi_context(
     near_miss_dicts = [nm.to_dict() for nm in near_misses]
 
     # Use actionable clusters (superset of existing)
-    actionable_clusters = find_actionable_failure_clusters(
-        result_dicts, report.config_snapshot
-    )
+    actionable_clusters = find_actionable_failure_clusters(result_dicts, report.config_snapshot)
     cluster_dicts = [c.to_dict() for c in actionable_clusters]
 
     method_metrics = [me.to_dict() for me in primary.method_metrics.values()]
@@ -635,7 +634,9 @@ def _build_multi_context(
         current_config=report.config_snapshot,
         config_schema=pipeline_config_schema or {},
         hard_constraints=hard_constraints or [],
-        optimization_target=(optimization_targets or [{"metric": "sensitivity", "direction": "max"}])[0],
+        optimization_target=(
+            optimization_targets or [{"metric": "sensitivity", "direction": "max"}]
+        )[0],
         seed_variance=seed_variance,
         item_stability=item_stability_list,
         sample_size=sample_size,

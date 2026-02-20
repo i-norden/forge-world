@@ -154,9 +154,7 @@ class DiffReport:
         if self.unstable_items:
             lines.append(f"## Unstable Items ({len(self.unstable_items)})")
             for item in self.unstable_items:
-                lines.append(
-                    f"- `{item['item_id']}`: stability={item.get('stability', '?')}"
-                )
+                lines.append(f"- `{item['item_id']}`: stability={item.get('stability', '?')}")
             lines.append("")
 
         if (
@@ -217,18 +215,19 @@ def compute_diff(
             baseline_score = _SEVERITY_SCORES.get(baseline_risk, 0)
             current_score = _SEVERITY_SCORES.get(current_risk, 0)
             direction = "up" if current_score > baseline_score else "down"
-            risk_shifts.append(RiskShift(
-                item_id=result.item_id,
-                category=result.category,
-                baseline_risk=baseline_risk,
-                current_risk=current_risk,
-                direction=direction,
-            ))
+            risk_shifts.append(
+                RiskShift(
+                    item_id=result.item_id,
+                    category=result.category,
+                    baseline_risk=baseline_risk,
+                    current_risk=current_risk,
+                    direction=direction,
+                )
+            )
 
     # Boundary items: compare current near-misses against baseline distances
     result_dicts = [r.to_dict() for r in primary.item_results]
     current_near_misses = find_near_misses(result_dicts)
-    current_nm_map = {nm.item_id: nm for nm in current_near_misses}
 
     # Compute baseline near-miss distances for comparison
     baseline_distances = _compute_baseline_distances(snapshot.item_outcomes)
@@ -240,14 +239,16 @@ def compute_diff(
             current_dist = nm.distance_to_boundary
             if abs(baseline_dist - current_dist) > 0.01:
                 direction = "approaching" if current_dist < baseline_dist else "receding"
-                boundary_items.append(BoundaryItem(
-                    item_id=nm.item_id,
-                    category=nm.category,
-                    passed=nm.passed,
-                    distance_to_boundary=current_dist,
-                    direction=direction,
-                    baseline_distance=baseline_dist,
-                ))
+                boundary_items.append(
+                    BoundaryItem(
+                        item_id=nm.item_id,
+                        category=nm.category,
+                        passed=nm.passed,
+                        distance_to_boundary=current_dist,
+                        direction=direction,
+                        baseline_distance=baseline_dist,
+                    )
+                )
 
     # Unstable items (from regression report, multi-seed only)
     unstable_items = regression.unstable_items

@@ -148,6 +148,7 @@ class TestValidateProposals:
 
     def test_valid_proposal_passes(self):
         from forge_world.core.proposals import validate_proposals
+
         proposals = [ParameterProposal("threshold", 0.6)]
         result = validate_proposals(proposals, self._schema(), self._config())
         assert len(result.valid_proposals) == 1
@@ -155,6 +156,7 @@ class TestValidateProposals:
 
     def test_unknown_path_rejected(self):
         from forge_world.core.proposals import validate_proposals
+
         proposals = [ParameterProposal("nonexistent_param", 0.6)]
         result = validate_proposals(proposals, self._schema(), self._config())
         assert len(result.valid_proposals) == 0
@@ -163,6 +165,7 @@ class TestValidateProposals:
 
     def test_out_of_range_rejected(self):
         from forge_world.core.proposals import validate_proposals
+
         proposals = [ParameterProposal("threshold", 1.5)]
         result = validate_proposals(proposals, self._schema(), self._config())
         assert len(result.valid_proposals) == 0
@@ -171,6 +174,7 @@ class TestValidateProposals:
 
     def test_wrong_type_rejected(self):
         from forge_world.core.proposals import validate_proposals
+
         proposals = [ParameterProposal("count", 3.7)]
         result = validate_proposals(proposals, self._schema(), self._config())
         assert len(result.valid_proposals) == 0
@@ -179,10 +183,11 @@ class TestValidateProposals:
 
     def test_mixed_valid_and_invalid(self):
         from forge_world.core.proposals import validate_proposals
+
         proposals = [
-            ParameterProposal("threshold", 0.6),   # valid
-            ParameterProposal("threshold", 1.5),    # out of range
-            ParameterProposal("weight", 0.8),       # valid
+            ParameterProposal("threshold", 0.6),  # valid
+            ParameterProposal("threshold", 1.5),  # out of range
+            ParameterProposal("weight", 0.8),  # valid
         ]
         result = validate_proposals(proposals, self._schema(), self._config())
         assert len(result.valid_proposals) == 2
@@ -190,6 +195,7 @@ class TestValidateProposals:
 
     def test_error_summary_format(self):
         from forge_world.core.proposals import validate_proposals
+
         proposals = [
             ParameterProposal("nonexistent", 0.6),
             ParameterProposal("threshold", 2.0),
@@ -202,6 +208,7 @@ class TestValidateProposals:
 
     def test_no_errors_empty_summary(self):
         from forge_world.core.proposals import validate_proposals
+
         proposals = [ParameterProposal("threshold", 0.6)]
         result = validate_proposals(proposals, self._schema(), self._config())
         assert result.error_summary() == ""
@@ -209,6 +216,7 @@ class TestValidateProposals:
     def test_integer_accepts_whole_float(self):
         """A float like 5.0 should be accepted for integer params."""
         from forge_world.core.proposals import validate_proposals
+
         proposals = [ParameterProposal("count", 5.0)]
         result = validate_proposals(proposals, self._schema(), self._config())
         assert len(result.valid_proposals) == 1

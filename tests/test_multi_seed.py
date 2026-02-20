@@ -56,8 +56,10 @@ class SimpleAggregator:
     def aggregate(self, findings: list[Finding]) -> AggregatedResult:
         if not findings:
             return AggregatedResult(
-                risk_level=Severity.CLEAN, overall_confidence=0.0,
-                converging_evidence=False, total_findings=0,
+                risk_level=Severity.CLEAN,
+                overall_confidence=0.0,
+                converging_evidence=False,
+                total_findings=0,
             )
         return AggregatedResult(
             risk_level=max(f.severity for f in findings),
@@ -78,32 +80,68 @@ class SeedAwareDataset:
 
     def __init__(self):
         self._fixed = [
-            LabeledItem(id="fixed_pass", category="test", expected_label="findings",
-                        data={"score": 0.9, "method": "ela"}),
-            LabeledItem(id="fixed_fail", category="test", expected_label="findings",
-                        data={"score": 0.3, "method": "ela"}),
-            LabeledItem(id="fixed_clean", category="clean", expected_label="clean",
-                        data={"score": 0.1, "method": "ela"}),
+            LabeledItem(
+                id="fixed_pass",
+                category="test",
+                expected_label="findings",
+                data={"score": 0.9, "method": "ela"},
+            ),
+            LabeledItem(
+                id="fixed_fail",
+                category="test",
+                expected_label="findings",
+                data={"score": 0.3, "method": "ela"},
+            ),
+            LabeledItem(
+                id="fixed_clean",
+                category="clean",
+                expected_label="clean",
+                data={"score": 0.1, "method": "ela"},
+            ),
         ]
         # Seed-specific items with different characteristics
         self._seed_items = {
             42: [
-                LabeledItem(id="s42_easy", category="seeded", expected_label="findings",
-                            data={"score": 0.85, "method": "ela"}),
-                LabeledItem(id="s42_hard", category="seeded", expected_label="findings",
-                            data={"score": 0.4, "method": "ela"}),
+                LabeledItem(
+                    id="s42_easy",
+                    category="seeded",
+                    expected_label="findings",
+                    data={"score": 0.85, "method": "ela"},
+                ),
+                LabeledItem(
+                    id="s42_hard",
+                    category="seeded",
+                    expected_label="findings",
+                    data={"score": 0.4, "method": "ela"},
+                ),
             ],
             137: [
-                LabeledItem(id="s137_easy", category="seeded", expected_label="findings",
-                            data={"score": 0.95, "method": "ela"}),
-                LabeledItem(id="s137_borderline", category="seeded", expected_label="findings",
-                            data={"score": 0.5, "method": "ela"}),
+                LabeledItem(
+                    id="s137_easy",
+                    category="seeded",
+                    expected_label="findings",
+                    data={"score": 0.95, "method": "ela"},
+                ),
+                LabeledItem(
+                    id="s137_borderline",
+                    category="seeded",
+                    expected_label="findings",
+                    data={"score": 0.5, "method": "ela"},
+                ),
             ],
             256: [
-                LabeledItem(id="s256_all_pass", category="seeded", expected_label="findings",
-                            data={"score": 0.9, "method": "ela"}),
-                LabeledItem(id="s256_all_pass2", category="seeded", expected_label="findings",
-                            data={"score": 0.8, "method": "ela"}),
+                LabeledItem(
+                    id="s256_all_pass",
+                    category="seeded",
+                    expected_label="findings",
+                    data={"score": 0.9, "method": "ela"},
+                ),
+                LabeledItem(
+                    id="s256_all_pass2",
+                    category="seeded",
+                    expected_label="findings",
+                    data={"score": 0.8, "method": "ela"},
+                ),
             ],
         }
 

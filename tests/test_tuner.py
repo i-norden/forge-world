@@ -14,15 +14,15 @@ import pytest
 
 optuna = pytest.importorskip("optuna")
 
-from forge_world.core.protocols import (
+from forge_world.core.protocols import (  # noqa: E402
     AggregatedResult,
     Finding,
     LabeledItem,
     PassFailRule,
     Severity,
 )
-from forge_world.core.runner import BenchmarkRunner
-from forge_world.core.tuner import (
+from forge_world.core.runner import BenchmarkRunner  # noqa: E402
+from forge_world.core.tuner import (  # noqa: E402
     TunerConfig,
     TunerResult,
     apply_best_params,
@@ -101,23 +101,33 @@ class TunerFakeDataset:
     def __init__(self):
         self._items = [
             LabeledItem(
-                id="a1", category="anomalous", expected_label="findings",
+                id="a1",
+                category="anomalous",
+                expected_label="findings",
                 data={"id": "a1", "score": 0.9, "method": "ela"},
             ),
             LabeledItem(
-                id="a2", category="anomalous", expected_label="findings",
+                id="a2",
+                category="anomalous",
+                expected_label="findings",
                 data={"id": "a2", "score": 0.6, "method": "ela"},
             ),
             LabeledItem(
-                id="a3", category="anomalous", expected_label="findings",
+                id="a3",
+                category="anomalous",
+                expected_label="findings",
                 data={"id": "a3", "score": 0.35, "method": "ela"},
             ),
             LabeledItem(
-                id="c1", category="clean", expected_label="clean",
+                id="c1",
+                category="clean",
+                expected_label="clean",
                 data={"id": "c1", "score": 0.1, "method": "ela"},
             ),
             LabeledItem(
-                id="c2", category="clean", expected_label="clean",
+                id="c2",
+                category="clean",
+                expected_label="clean",
                 data={"id": "c2", "score": 0.2, "method": "ela"},
             ),
         ]
@@ -179,7 +189,12 @@ class TestTunerResultToDict:
             best_values={"sensitivity": 0.95},
             pareto_front=[{"params": {"threshold": 0.35}, "values": {"sensitivity": 0.95}}],
             all_trials_summary=[
-                {"trial": 0, "params": {"threshold": 0.5}, "values": {"sensitivity": 0.8}, "violated": False},
+                {
+                    "trial": 0,
+                    "params": {"threshold": 0.5},
+                    "values": {"sensitivity": 0.8},
+                    "violated": False,
+                },
             ],
         )
         d = tr.to_dict()
@@ -221,8 +236,14 @@ class TestTunerResultPromptContext:
             best_params={"threshold": 0.3},
             best_values={"sensitivity": 0.9, "latency_mean_ms": 50.0},
             pareto_front=[
-                {"params": {"threshold": 0.3}, "values": {"sensitivity": 0.9, "latency_mean_ms": 50.0}},
-                {"params": {"threshold": 0.4}, "values": {"sensitivity": 0.85, "latency_mean_ms": 30.0}},
+                {
+                    "params": {"threshold": 0.3},
+                    "values": {"sensitivity": 0.9, "latency_mean_ms": 50.0},
+                },
+                {
+                    "params": {"threshold": 0.4},
+                    "values": {"sensitivity": 0.85, "latency_mean_ms": 30.0},
+                },
             ],
             all_trials_summary=[],
         )
@@ -259,7 +280,9 @@ class TestRunTuningBasic:
             )
             result = run_tuning(runner, tc)
 
-        assert result.best_values.get("sensitivity", 0) >= 0.4  # Should find something better than 0.8 threshold
+        assert (
+            result.best_values.get("sensitivity", 0) >= 0.4
+        )  # Should find something better than 0.8 threshold
 
 
 class TestRunTuningMultiObjective:
@@ -298,7 +321,6 @@ class TestRunTuningConstraintPenalty:
 
         assert result.n_trials_completed == 5
         # Some trials may have been violated
-        violated_count = sum(1 for t in result.all_trials_summary if t.get("violated"))
         # At least the result should complete without errors
         assert len(result.all_trials_summary) == 5
 

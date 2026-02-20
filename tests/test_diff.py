@@ -29,8 +29,12 @@ def _make_report(items: list[dict[str, Any]]) -> BenchmarkReport:
     cm = ConfusionMatrix(
         true_positives=sum(1 for r in item_results if r.passed and r.expected_label == "findings"),
         true_negatives=sum(1 for r in item_results if r.passed and r.expected_label == "clean"),
-        false_positives=sum(1 for r in item_results if not r.passed and r.expected_label == "clean"),
-        false_negatives=sum(1 for r in item_results if not r.passed and r.expected_label == "findings"),
+        false_positives=sum(
+            1 for r in item_results if not r.passed and r.expected_label == "clean"
+        ),
+        false_negatives=sum(
+            1 for r in item_results if not r.passed and r.expected_label == "findings"
+        ),
     )
     return BenchmarkReport(
         run_id="test",
@@ -106,10 +110,15 @@ class TestDiff:
             items_regressed=1,
             regressions=[
                 RegressionItem(
-                    item_id="item1", category="test", expected_label="findings",
-                    baseline_passed=True, current_passed=False,
-                    baseline_risk="high", current_risk="low",
-                    baseline_confidence=0.7, current_confidence=0.3,
+                    item_id="item1",
+                    category="test",
+                    expected_label="findings",
+                    baseline_passed=True,
+                    current_passed=False,
+                    baseline_risk="high",
+                    current_risk="low",
+                    baseline_confidence=0.7,
+                    current_confidence=0.3,
                 ),
             ],
             baseline_pass_rate="1/1",
@@ -136,10 +145,15 @@ class TestDiff:
             items_improved=1,
             improvements=[
                 RegressionItem(
-                    item_id="item1", category="test", expected_label="findings",
-                    baseline_passed=False, current_passed=True,
-                    baseline_risk="low", current_risk="high",
-                    baseline_confidence=0.3, current_confidence=0.9,
+                    item_id="item1",
+                    category="test",
+                    expected_label="findings",
+                    baseline_passed=False,
+                    current_passed=True,
+                    baseline_risk="low",
+                    current_risk="high",
+                    baseline_confidence=0.3,
+                    current_confidence=0.9,
                 ),
             ],
             baseline_pass_rate="0/1",
@@ -193,7 +207,9 @@ class TestDiff:
         )
         diff = DiffReport(
             summary=summary,
-            new_failures=[{"item_id": "x", "category": "a", "baseline_risk": "h", "current_risk": "l"}],
+            new_failures=[
+                {"item_id": "x", "category": "a", "baseline_risk": "h", "current_risk": "l"}
+            ],
             risk_shifts=[RiskShift("y", "b", "medium", "high", "up")],
         )
         md = diff.to_markdown()
@@ -222,13 +238,25 @@ class TestDiff:
         """Items moving closer to the pass/fail boundary are detected."""
         # Baseline: item at medium risk (distance 0 from boundary for findings items)
         baseline_items = [
-            {"id": "item1", "passed": True, "risk": "high", "expected": "findings",
-             "confidence": 0.9, "category": "test"},
+            {
+                "id": "item1",
+                "passed": True,
+                "risk": "high",
+                "expected": "findings",
+                "confidence": 0.9,
+                "category": "test",
+            },
         ]
         # Current: item at medium risk (closer to boundary)
         current_items = [
-            {"id": "item1", "passed": True, "risk": "medium", "expected": "findings",
-             "confidence": 0.5, "category": "test"},
+            {
+                "id": "item1",
+                "passed": True,
+                "risk": "medium",
+                "expected": "findings",
+                "confidence": 0.5,
+                "category": "test",
+            },
         ]
         report = _make_report(current_items)
         snapshot = _make_snapshot(baseline_items)

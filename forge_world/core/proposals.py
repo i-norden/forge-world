@@ -63,10 +63,7 @@ class ProposalFile:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ProposalFile:
         return cls(
-            proposals=[
-                ParameterProposal.from_dict(p)
-                for p in data.get("proposals", [])
-            ],
+            proposals=[ParameterProposal.from_dict(p) for p in data.get("proposals", [])],
             agent_notes=data.get("agent_notes", ""),
         )
 
@@ -86,9 +83,7 @@ class ProposalFile:
         path.write_text(json.dumps(self.to_dict(), indent=2))
 
 
-def apply_proposals(
-    pipeline: Any, proposals: list[ParameterProposal]
-) -> dict[str, Any]:
+def apply_proposals(pipeline: Any, proposals: list[ParameterProposal]) -> dict[str, Any]:
     """Apply parameter proposals to pipeline config.
 
     1. Get current config via pipeline.get_config()
@@ -101,7 +96,9 @@ def apply_proposals(
     """
     old_config = pipeline.get_config()
     if not isinstance(old_config, dict):
-        old_config = old_config.model_dump() if hasattr(old_config, "model_dump") else dict(old_config)
+        old_config = (
+            old_config.model_dump() if hasattr(old_config, "model_dump") else dict(old_config)
+        )
     old_config_copy = _deep_copy_dict(old_config)
 
     new_config = _deep_copy_dict(old_config)
@@ -110,9 +107,7 @@ def apply_proposals(
             # Verify path exists (raises KeyError/AttributeError if not)
             get_nested_value(new_config, proposal.parameter_path)
         except (KeyError, AttributeError) as exc:
-            raise KeyError(
-                f"Unknown parameter path: {proposal.parameter_path}"
-            ) from exc
+            raise KeyError(f"Unknown parameter path: {proposal.parameter_path}") from exc
         set_nested_value(new_config, proposal.parameter_path, proposal.new_value)
 
     pipeline.set_config(new_config)
@@ -200,12 +195,14 @@ def validate_proposals(
             try:
                 get_nested_value(current_config, path)
             except (KeyError, AttributeError):
-                result.errors.append(ProposalValidationError(
-                    parameter_path=path,
-                    error_type="unknown_path",
-                    message=f"Parameter '{path}' not found in schema or config",
-                    proposed_value=value,
-                ))
+                result.errors.append(
+                    ProposalValidationError(
+                        parameter_path=path,
+                        error_type="unknown_path",
+                        message=f"Parameter '{path}' not found in schema or config",
+                        proposed_value=value,
+                    )
+                )
                 continue
             # Path exists in config but not in schema — allow it (non-numeric)
             result.valid_proposals.append(proposal)
@@ -219,12 +216,14 @@ def validate_proposals(
                 if isinstance(value, float) and value == int(value):
                     pass  # acceptable
                 else:
-                    result.errors.append(ProposalValidationError(
-                        parameter_path=path,
-                        error_type="wrong_type",
-                        message=f"Expected integer, got {type(value).__name__}",
-                        proposed_value=value,
-                    ))
+                    result.errors.append(
+                        ProposalValidationError(
+                            parameter_path=path,
+                            error_type="wrong_type",
+                            message=f"Expected integer, got {type(value).__name__}",
+                            proposed_value=value,
+                        )
+                    )
                     continue
 
         # Check bounds
@@ -233,30 +232,36 @@ def validate_proposals(
         try:
             numeric_value = float(value)
         except (TypeError, ValueError):
-            result.errors.append(ProposalValidationError(
-                parameter_path=path,
-                error_type="wrong_type",
-                message=f"Expected numeric value, got {type(value).__name__}",
-                proposed_value=value,
-            ))
+            result.errors.append(
+                ProposalValidationError(
+                    parameter_path=path,
+                    error_type="wrong_type",
+                    message=f"Expected numeric value, got {type(value).__name__}",
+                    proposed_value=value,
+                )
+            )
             continue
 
         if param_min is not None and numeric_value < float(param_min):
-            result.errors.append(ProposalValidationError(
-                parameter_path=path,
-                error_type="out_of_range",
-                message=f"Value {value} below minimum {param_min}",
-                proposed_value=value,
-            ))
+            result.errors.append(
+                ProposalValidationError(
+                    parameter_path=path,
+                    error_type="out_of_range",
+                    message=f"Value {value} below minimum {param_min}",
+                    proposed_value=value,
+                )
+            )
             continue
 
         if param_max is not None and numeric_value > float(param_max):
-            result.errors.append(ProposalValidationError(
-                parameter_path=path,
-                error_type="out_of_range",
-                message=f"Value {value} above maximum {param_max}",
-                proposed_value=value,
-            ))
+            result.errors.append(
+                ProposalValidationError(
+                    parameter_path=path,
+                    error_type="out_of_range",
+                    message=f"Value {value} above maximum {param_max}",
+                    proposed_value=value,
+                )
+            )
             continue
 
         result.valid_proposals.append(proposal)
