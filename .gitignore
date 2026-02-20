@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+
+# forge-world cache (not committed, unlike snapshots)
+.forge-world/cache/
+.forge-world/evolution-context.md
+
+# Test / IDE caches
+.pytest_cache/
+.ruff_cache/
+.idea/
+
+# OS
+.DS_Store
