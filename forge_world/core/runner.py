@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import statistics
 import subprocess
+import time
 import uuid
 from collections import Counter
 from dataclasses import dataclass, field
@@ -35,6 +37,65 @@ from forge_world.core.protocols import (
     PassFailRuleSet,
     Pipeline,
 )
+
+
+@dataclass
+class PerformanceMetrics:
+    """Timing metrics for pipeline.analyze() calls."""
+
+    latency_mean_ms: float
+    latency_p50_ms: float
+    latency_p95_ms: float
+    latency_p99_ms: float
+    total_time_ms: float
+    throughput_items_per_sec: float
+    item_count: int  # items actually analyzed (not cached)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "latency_mean_ms": round(self.latency_mean_ms, 2),
+            "latency_p50_ms": round(self.latency_p50_ms, 2),
+            "latency_p95_ms": round(self.latency_p95_ms, 2),
+            "latency_p99_ms": round(self.latency_p99_ms, 2),
+            "total_time_ms": round(self.total_time_ms, 2),
+            "throughput_items_per_sec": round(self.throughput_items_per_sec, 2),
+            "item_count": self.item_count,
+        }
+
+
+def _compute_performance_metrics(
+    latencies: list[float],
+    total_time_ms: float,
+) -> PerformanceMetrics | None:
+    """Compute performance metrics from a list of latencies (in ms).
+
+    Returns None if no latencies were recorded (all cached).
+    """
+    if not latencies:
+        return None
+
+    sorted_latencies = sorted(latencies)
+    n = len(sorted_latencies)
+
+    def _percentile(pct: float) -> float:
+        idx = (pct / 100.0) * (n - 1)
+        lower = int(idx)
+        upper = min(lower + 1, n - 1)
+        frac = idx - lower
+        return sorted_latencies[lower] * (1 - frac) + sorted_latencies[upper] * frac
+
+    mean = statistics.mean(sorted_latencies)
+    throughput = (n / total_time_ms * 1000.0) if total_time_ms > 0 else 0.0
+
+    return PerformanceMetrics(
+        latency_mean_ms=mean,
+        latency_p50_ms=_percentile(50),
+        latency_p95_ms=_percentile(95),
+        latency_p99_ms=_percentile(99),
+        total_time_ms=total_time_ms,
+        throughput_items_per_sec=throughput,
+        item_count=n,
+    )
 
 
 @dataclass
@@ -80,6 +141,7 @@ class BenchmarkReport:
     category_metrics: list[CategoryMetrics]
     method_metrics: dict[str, MethodEffectiveness]
     config_snapshot: dict[str, Any] = field(default_factory=dict)
+    performance: PerformanceMetrics | None = None
 
     @property
     def pass_count(self) -> int:
@@ -110,7 +172,7 @@ class BenchmarkReport:
         return self.confusion_matrix.f1
 
     def summary(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "run_id": self.run_id,
             "timestamp": self.timestamp,
             "git_sha": self.git_sha,
@@ -121,9 +183,14 @@ class BenchmarkReport:
             "fpr": round(self.fpr, 4),
             "f1": round(self.f1, 4),
         }
+        if self.performance:
+            d["latency_mean_ms"] = round(self.performance.latency_mean_ms, 2)
+            d["latency_p95_ms"] = round(self.performance.latency_p95_ms, 2)
+            d["throughput_items_per_sec"] = round(self.performance.throughput_items_per_sec, 2)
+        return d
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "run_id": self.run_id,
             "timestamp": self.timestamp,
             "git_sha": self.git_sha,
@@ -135,6 +202,9 @@ class BenchmarkReport:
             "method_metrics": {k: v.to_dict() for k, v in self.method_metrics.items()},
             "summary": self.summary(),
         }
+        if self.performance:
+            d["performance"] = self.performance.to_dict()
+        return d
 
 
 # --- Multi-seed types ---
@@ -191,9 +261,7 @@ class AggregateMetrics:
             "min_sensitivity": round(self.min_sensitivity, 4),
             "worst_case_fpr": round(self.worst_case_fpr, 4),
             "mean_f1": round(self.mean_f1, 4),
-            "item_stability": {
-                k: round(v, 4) for k, v in sorted(self.item_stability.items())
-            },
+            "item_stability": {k: round(v, 4) for k, v in sorted(self.item_stability.items())},
         }
 
 
@@ -208,6 +276,7 @@ class MultiBenchmarkReport:
     seed_reports: list[SeedReport]
     aggregate_metrics: AggregateMetrics
     config_snapshot: dict[str, Any] = field(default_factory=dict)
+    performance: PerformanceMetrics | None = None
 
     @property
     def stable_reports(self) -> list[SeedReport]:
@@ -235,7 +304,7 @@ class MultiBenchmarkReport:
 
     def summary(self) -> dict[str, Any]:
         am = self.aggregate_metrics
-        return {
+        d: dict[str, Any] = {
             "run_id": self.run_id,
             "timestamp": self.timestamp,
             "git_sha": self.git_sha,
@@ -250,9 +319,14 @@ class MultiBenchmarkReport:
             "worst_case_fpr": round(am.worst_case_fpr, 4),
             "mean_f1": round(am.mean_f1, 4),
         }
+        if self.performance:
+            d["latency_mean_ms"] = round(self.performance.latency_mean_ms, 2)
+            d["latency_p95_ms"] = round(self.performance.latency_p95_ms, 2)
+            d["throughput_items_per_sec"] = round(self.performance.throughput_items_per_sec, 2)
+        return d
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "run_id": self.run_id,
             "timestamp": self.timestamp,
             "git_sha": self.git_sha,
@@ -262,6 +336,9 @@ class MultiBenchmarkReport:
             "aggregate_metrics": self.aggregate_metrics.to_dict(),
             "summary": self.summary(),
         }
+        if self.performance:
+            d["performance"] = self.performance.to_dict()
+        return d
 
 
 # --- Helpers ---
@@ -367,6 +444,29 @@ def _compute_aggregate_metrics(seed_reports: list[SeedReport]) -> AggregateMetri
     )
 
 
+def _aggregate_performance(seed_reports: list[SeedReport]) -> PerformanceMetrics | None:
+    """Aggregate performance metrics across seed runs.
+
+    Uses mean of means, max of p95/p99, sum of total_time, sum of item_count.
+    """
+    perfs = [sr.report.performance for sr in seed_reports if sr.report.performance is not None]
+    if not perfs:
+        return None
+
+    total_items = sum(p.item_count for p in perfs)
+    total_time = sum(p.total_time_ms for p in perfs)
+
+    return PerformanceMetrics(
+        latency_mean_ms=statistics.mean(p.latency_mean_ms for p in perfs),
+        latency_p50_ms=statistics.mean(p.latency_p50_ms for p in perfs),
+        latency_p95_ms=max(p.latency_p95_ms for p in perfs),
+        latency_p99_ms=max(p.latency_p99_ms for p in perfs),
+        total_time_ms=total_time,
+        throughput_items_per_sec=(total_items / total_time * 1000.0) if total_time > 0 else 0.0,
+        item_count=total_items,
+    )
+
+
 class BenchmarkRunner:
     """Runs a full benchmark cycle: pipeline + aggregator + dataset + rules.
 
@@ -429,9 +529,7 @@ class BenchmarkRunner:
                 raise ValueError("Dataset does not support tiers.")
             tier_map = self.dataset.tiers()
             if tier not in tier_map:
-                raise ValueError(
-                    f"Unknown tier '{tier}'. Available: {sorted(tier_map.keys())}"
-                )
+                raise ValueError(f"Unknown tier '{tier}'. Available: {sorted(tier_map.keys())}")
             allowed = set(tier_map[tier])
             items = [item for item in items if item.category in allowed]
 
@@ -447,6 +545,8 @@ class BenchmarkRunner:
 
         item_results: list[ItemResult] = []
         total_items = len(items)
+        run_start = time.perf_counter()
+        analyze_latencies: list[float] = []
 
         for idx, item in enumerate(items):
             cached = False
@@ -468,9 +568,11 @@ class BenchmarkRunner:
             if self.on_item_start:
                 self.on_item_start(item, idx, total_items, cached)
 
-            # Layer 3: analyze
+            # Layer 3: analyze (with timing)
             if findings is None:
+                t0 = time.perf_counter()
                 findings = self.pipeline.analyze(item.data)
+                analyze_latencies.append((time.perf_counter() - t0) * 1000.0)
                 if _analysis_cache is not None:
                     _analysis_cache[item.id] = findings
                 if self.analysis_cache is not None:
@@ -508,11 +610,16 @@ class BenchmarkRunner:
             if hasattr(config, "model_dump"):
                 config_snapshot = config.model_dump()
             elif hasattr(config, "__dict__"):
-                config_snapshot = {k: v for k, v in config.__dict__.items() if not k.startswith("_")}
+                config_snapshot = {
+                    k: v for k, v in config.__dict__.items() if not k.startswith("_")
+                }
             else:
                 config_snapshot = {"raw": str(config)}
         except Exception:
             config_snapshot = {}
+
+        total_time_ms = (time.perf_counter() - run_start) * 1000.0
+        perf = _compute_performance_metrics(analyze_latencies, total_time_ms)
 
         return BenchmarkReport(
             run_id=run_id,
@@ -524,6 +631,7 @@ class BenchmarkRunner:
             category_metrics=cat_metrics,
             method_metrics=method_metrics,
             config_snapshot=config_snapshot,
+            performance=perf,
         )
 
     def run_multi(
@@ -549,13 +657,9 @@ class BenchmarkRunner:
         config = self.pipeline.get_config()
         config_hash = _hash_config(config)
 
-        exploration_seeds = _derive_exploration_seeds(
-            run_id, seed_strategy.n_exploration_seeds
-        )
+        exploration_seeds = _derive_exploration_seeds(run_id, seed_strategy.n_exploration_seeds)
 
-        all_seeds: list[tuple[int, str]] = [
-            (s, "stable") for s in seed_strategy.stable_seeds
-        ] + [
+        all_seeds: list[tuple[int, str]] = [(s, "stable") for s in seed_strategy.stable_seeds] + [
             (s, "exploration") for s in exploration_seeds
         ]
 
@@ -580,6 +684,9 @@ class BenchmarkRunner:
 
         aggregate = _compute_aggregate_metrics(seed_reports)
 
+        # Aggregate performance metrics across seeds
+        aggregate_perf = _aggregate_performance(seed_reports)
+
         # Serialize config snapshot
         try:
             if hasattr(config, "model_dump"):
@@ -601,4 +708,5 @@ class BenchmarkRunner:
             seed_reports=seed_reports,
             aggregate_metrics=aggregate,
             config_snapshot=config_snapshot,
+            performance=aggregate_perf,
         )

@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-
 @dataclass
 class ConfusionMatrix:
     """Binary confusion matrix for pass/fail classification."""
@@ -23,8 +22,7 @@ class ConfusionMatrix:
     @property
     def total(self) -> int:
         return (
-            self.true_positives + self.true_negatives
-            + self.false_positives + self.false_negatives
+            self.true_positives + self.true_negatives + self.false_positives + self.false_negatives
         )
 
     @property
@@ -378,11 +376,13 @@ def find_failure_clusters(
     # Cluster by method combination (items failing with the same set of methods)
     method_combos: dict[tuple[str, ...], list[str]] = {}
     for f in failures:
-        methods = sorted({
-            finding.get("method", "")
-            for finding in f.get("findings", [])
-            if finding.get("method")
-        })
+        methods = sorted(
+            {
+                finding.get("method", "")
+                for finding in f.get("findings", [])
+                if finding.get("method")
+            }
+        )
         if methods:
             key = tuple(methods)
             method_combos.setdefault(key, []).append(f["item_id"])
@@ -461,9 +461,7 @@ def find_actionable_failure_clusters(
     # Read threshold from config if available
     threshold = 0.60  # default
     if config_snapshot:
-        threshold = float(
-            config_snapshot.get("convergence_confidence_threshold", threshold)
-        )
+        threshold = float(config_snapshot.get("convergence_confidence_threshold", threshold))
 
     # 1. No-signal failures: zero methods flagged
     no_signal_ids = []
@@ -472,11 +470,7 @@ def find_actionable_failure_clusters(
 
     for f in failures:
         findings = f.get("findings", [])
-        methods_fired = {
-            finding.get("method", "")
-            for finding in findings
-            if finding.get("method")
-        }
+        methods_fired = {finding.get("method", "") for finding in findings if finding.get("method")}
 
         if not methods_fired:
             no_signal_ids.append(f["item_id"])
@@ -488,14 +482,16 @@ def find_actionable_failure_clusters(
             below_threshold_items.append(f)
 
     if no_signal_ids:
-        clusters.append(ActionableCluster(
-            cluster_type="no_signal",
-            pattern="Undetectable (no methods produced findings)",
-            count=len(no_signal_ids),
-            item_ids=no_signal_ids,
-            suggestion="Undetectable by current methods.",
-            achievable=False,
-        ))
+        clusters.append(
+            ActionableCluster(
+                cluster_type="no_signal",
+                pattern="Undetectable (no methods produced findings)",
+                count=len(no_signal_ids),
+                item_ids=no_signal_ids,
+                suggestion="Undetectable by current methods.",
+                achievable=False,
+            )
+        )
 
     # 2. Below-threshold failures with counterfactual
     if below_threshold_items:
@@ -531,15 +527,17 @@ def find_actionable_failure_clusters(
             f"Lower convergence_confidence_threshold from {threshold:.2f} to {best_threshold:.2f}"
         )
 
-        clusters.append(ActionableCluster(
-            cluster_type="below_threshold",
-            pattern="Below threshold (methods fired but confidence insufficient)",
-            count=len(below_threshold_items),
-            item_ids=[f["item_id"] for f in below_threshold_items],
-            counterfactual=counterfactual,
-            suggestion=suggestion,
-            achievable=True,
-        ))
+        clusters.append(
+            ActionableCluster(
+                cluster_type="below_threshold",
+                pattern="Below threshold (methods fired but confidence insufficient)",
+                count=len(below_threshold_items),
+                item_ids=[f["item_id"] for f in below_threshold_items],
+                counterfactual=counterfactual,
+                suggestion=suggestion,
+                achievable=True,
+            )
+        )
 
     # 3. Single-method capped
     if single_method_items:
@@ -560,29 +558,33 @@ def find_actionable_failure_clusters(
             if common_method
             else "Add corroborating methods."
         )
-        clusters.append(ActionableCluster(
-            cluster_type="single_method_capped",
-            pattern="Single method capped (risk limited by single-method penalty)",
-            count=len(single_method_items),
-            item_ids=[f["item_id"] for f in single_method_items],
-            common_methods=[common_method] if common_method else [],
-            suggestion=suggestion,
-            achievable=True,
-        ))
+        clusters.append(
+            ActionableCluster(
+                cluster_type="single_method_capped",
+                pattern="Single method capped (risk limited by single-method penalty)",
+                count=len(single_method_items),
+                item_ids=[f["item_id"] for f in single_method_items],
+                common_methods=[common_method] if common_method else [],
+                suggestion=suggestion,
+                achievable=True,
+            )
+        )
 
     # 4. Existing clusters converted
     existing = find_failure_clusters(results)
     for fc in existing:
         cluster_type = "category" if fc.pattern.startswith("category:") else "methods"
-        clusters.append(ActionableCluster(
-            cluster_type=cluster_type,
-            pattern=fc.pattern,
-            count=fc.count,
-            item_ids=fc.item_ids,
-            common_methods=fc.common_methods,
-            common_category=fc.common_category,
-            achievable=True,
-        ))
+        clusters.append(
+            ActionableCluster(
+                cluster_type=cluster_type,
+                pattern=fc.pattern,
+                count=fc.count,
+                item_ids=fc.item_ids,
+                common_methods=fc.common_methods,
+                common_category=fc.common_category,
+                achievable=True,
+            )
+        )
 
     clusters.sort(key=lambda c: c.count, reverse=True)
     return clusters

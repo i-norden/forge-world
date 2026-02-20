@@ -4,15 +4,8 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
-from typing import Any
 
-from forge_world.core.protocols import (
-    AggregatedResult,
-    Finding,
-    LabeledItem,
-    PassFailRule,
-    Severity,
-)
+from forge_world.core.protocols import LabeledItem
 from forge_world.core.runner import BenchmarkRunner
 from forge_world.core.sensitivity import (
     ParameterSensitivity,

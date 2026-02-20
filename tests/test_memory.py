@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import tempfile
 from pathlib import Path
 
@@ -30,9 +29,7 @@ class TestMemoryEntry:
             iteration=1,
             timestamp="2025-01-01T00:00:00Z",
             files_changed=["config.py"],
-            parameter_changes=[
-                ParameterChange(path="threshold", old_value=0.5, new_value=0.6)
-            ],
+            parameter_changes=[ParameterChange(path="threshold", old_value=0.5, new_value=0.6)],
             metrics_before={"sensitivity": 0.8, "fpr": 0.0},
             metrics_after={"sensitivity": 0.82, "fpr": 0.0},
             accepted=True,
@@ -118,27 +115,31 @@ class TestEvolutionMemory:
 
     def test_to_prompt_context_with_entries(self):
         mem = EvolutionMemory()
-        mem.add_entry(self._make_entry(
-            iteration=1,
-            accepted=False,
-            reason="constraint_violated:fpr=0.05>0",
-            sensitivity_after=0.85,
-            fpr_after=0.05,
-            parameter_changes=[
-                ParameterChange(path="convergence_threshold", old_value=0.60, new_value=0.40)
-            ],
-            constraint_violations=["fpr=0.05>0"],
-        ))
-        mem.add_entry(self._make_entry(
-            iteration=2,
-            accepted=True,
-            reason="improved",
-            sensitivity_before=0.80,
-            sensitivity_after=0.82,
-            parameter_changes=[
-                ParameterChange(path="weight_clone", old_value=0.85, new_value=0.90)
-            ],
-        ))
+        mem.add_entry(
+            self._make_entry(
+                iteration=1,
+                accepted=False,
+                reason="constraint_violated:fpr=0.05>0",
+                sensitivity_after=0.85,
+                fpr_after=0.05,
+                parameter_changes=[
+                    ParameterChange(path="convergence_threshold", old_value=0.60, new_value=0.40)
+                ],
+                constraint_violations=["fpr=0.05>0"],
+            )
+        )
+        mem.add_entry(
+            self._make_entry(
+                iteration=2,
+                accepted=True,
+                reason="improved",
+                sensitivity_before=0.80,
+                sensitivity_after=0.82,
+                parameter_changes=[
+                    ParameterChange(path="weight_clone", old_value=0.85, new_value=0.90)
+                ],
+            )
+        )
 
         ctx = mem.to_prompt_context()
         assert "## Iteration History" in ctx
@@ -154,27 +155,31 @@ class TestEvolutionMemory:
 
     def test_what_not_to_try_constraint(self):
         mem = EvolutionMemory()
-        mem.add_entry(self._make_entry(
-            accepted=False,
-            reason="constraint_violated:fpr=0.05>0",
-            parameter_changes=[
-                ParameterChange(path="threshold", old_value=0.60, new_value=0.40)
-            ],
-            constraint_violations=["fpr=0.05>0"],
-        ))
+        mem.add_entry(
+            self._make_entry(
+                accepted=False,
+                reason="constraint_violated:fpr=0.05>0",
+                parameter_changes=[
+                    ParameterChange(path="threshold", old_value=0.60, new_value=0.40)
+                ],
+                constraint_violations=["fpr=0.05>0"],
+            )
+        )
         ctx = mem.to_prompt_context()
         assert "Do NOT decrease threshold" in ctx
         assert "constraint_violated" in ctx
 
     def test_what_not_to_try_no_impact(self):
         mem = EvolutionMemory()
-        mem.add_entry(self._make_entry(
-            accepted=False,
-            reason="not_improved",
-            parameter_changes=[
-                ParameterChange(path="weight_benford", old_value=0.3, new_value=0.5)
-            ],
-        ))
+        mem.add_entry(
+            self._make_entry(
+                accepted=False,
+                reason="not_improved",
+                parameter_changes=[
+                    ParameterChange(path="weight_benford", old_value=0.3, new_value=0.5)
+                ],
+            )
+        )
         ctx = mem.to_prompt_context()
         assert "Do NOT increase weight_benford" in ctx
         assert "no impact" in ctx
@@ -239,3 +244,77 @@ class TestComputeParameterDiff:
         changes = compute_parameter_diff(before, after)
         assert len(changes) == 1
         assert changes[0].path == "a.b.c"
+
+
+class TestBestTrackingTargetMetric:
+    def _make_entry(
+        self,
+        iteration: int = 1,
+        accepted: bool = True,
+        metrics_after: dict[str, float] | None = None,
+    ) -> MemoryEntry:
+        return MemoryEntry(
+            iteration=iteration,
+            timestamp="2025-01-01T00:00:00Z",
+            files_changed=[],
+            parameter_changes=[],
+            metrics_before={"sensitivity": 0.8, "f1": 0.7, "fpr": 0.0},
+            metrics_after=metrics_after or {"sensitivity": 0.82, "f1": 0.72, "fpr": 0.0},
+            accepted=accepted,
+            reason="improved" if accepted else "not_improved",
+            constraint_violations=[],
+        )
+
+    def test_best_tracking_uses_target_metric(self):
+        """f1-targeted memory tracks f1, not sensitivity."""
+        mem = EvolutionMemory()
+        mem.target_metric = "f1"
+        mem.target_direction = "max"
+
+        mem.add_entry(
+            self._make_entry(
+                iteration=1,
+                metrics_after={"sensitivity": 0.9, "f1": 0.70, "fpr": 0.0},
+            )
+        )
+        mem.add_entry(
+            self._make_entry(
+                iteration=2,
+                metrics_after={"sensitivity": 0.82, "f1": 0.85, "fpr": 0.0},
+            )
+        )
+        # Best should be iteration 2 because f1 is higher
+        assert mem.best_iteration == 2
+        assert mem.best_metrics["f1"] == 0.85
+
+    def test_best_tracking_min_direction(self):
+        """target_direction="min" tracks lowest."""
+        mem = EvolutionMemory()
+        mem.target_metric = "fpr"
+        mem.target_direction = "min"
+
+        mem.add_entry(
+            self._make_entry(
+                iteration=1,
+                metrics_after={"sensitivity": 0.8, "fpr": 0.05},
+            )
+        )
+        mem.add_entry(
+            self._make_entry(
+                iteration=2,
+                metrics_after={"sensitivity": 0.8, "fpr": 0.02},
+            )
+        )
+        # Best should be iteration 2 because fpr is lower
+        assert mem.best_iteration == 2
+        assert mem.best_metrics["fpr"] == 0.02
+
+    def test_target_metric_serialized(self):
+        """target_metric and target_direction survive round-trip."""
+        mem = EvolutionMemory()
+        mem.target_metric = "f1"
+        mem.target_direction = "min"
+        d = mem.to_dict()
+        restored = EvolutionMemory.from_dict(d)
+        assert restored.target_metric == "f1"
+        assert restored.target_direction == "min"

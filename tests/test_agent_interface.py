@@ -27,7 +27,12 @@ def _make_report() -> BenchmarkReport:
             converging_evidence=True,
             findings=[
                 {"method": "ela", "confidence": 0.8, "severity": "high", "title": "ELA anomaly"},
-                {"method": "clone_detection", "confidence": 0.9, "severity": "high", "title": "Clone"},
+                {
+                    "method": "clone_detection",
+                    "confidence": 0.9,
+                    "severity": "high",
+                    "title": "Clone",
+                },
             ],
             methods_flagged=["ela", "clone_detection"],
         ),
@@ -352,3 +357,59 @@ class TestEvolutionContextDict:
         assert "method_effectiveness" in d
         assert "current_config" in d
         assert d["current_config"]["threshold"] == 0.5
+
+
+class TestNewContextFields:
+    def test_validation_errors_in_prompt(self):
+        report = _make_report()
+        ctx = build_evolution_context(
+            report,
+            validation_errors="## Errors\n- threshold: out of range",
+        )
+        prompt = ctx.to_prompt_context()
+        assert "## Errors" in prompt
+        assert "threshold: out of range" in prompt
+
+    def test_evolve_mode_shows_options(self):
+        report = _make_report()
+        ctx = build_evolution_context(report, evolve_mode=True)
+        prompt = ctx.to_prompt_context()
+        assert "## How to Make Changes" in prompt
+        assert "Option 1" in prompt
+        assert "Option 2" in prompt
+
+    def test_evolve_mode_shows_auto_tuning(self):
+        report = _make_report()
+        ctx = build_evolution_context(report, evolve_mode=True)
+        prompt = ctx.to_prompt_context()
+        assert "Auto-Tuning" in prompt
+
+    def test_evolve_mode_off_hides_options(self):
+        report = _make_report()
+        ctx = build_evolution_context(report, evolve_mode=False)
+        prompt = ctx.to_prompt_context()
+        assert "How to Make Changes" not in prompt
+
+    def test_multi_target_renders_all_targets(self):
+        report = _make_report()
+        ctx = build_evolution_context(
+            report,
+            optimization_targets=[
+                {"metric": "sensitivity", "direction": "max"},
+                {"metric": "latency_mean_ms", "direction": "min"},
+            ],
+        )
+        prompt = ctx.to_prompt_context()
+        assert "## Optimization Targets" in prompt
+        assert "Maximize **sensitivity**" in prompt
+        assert "Minimize **latency_mean_ms**" in prompt
+
+    def test_single_target_renders_singular(self):
+        report = _make_report()
+        ctx = build_evolution_context(
+            report,
+            optimization_target={"metric": "sensitivity", "direction": "max"},
+        )
+        prompt = ctx.to_prompt_context()
+        assert "## Optimization Target" in prompt
+        assert "sensitivity" in prompt

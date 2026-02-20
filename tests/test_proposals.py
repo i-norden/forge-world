@@ -128,3 +128,96 @@ class TestApplyProposals:
             assert path.exists()
             path.unlink(missing_ok=True)
             assert not path.exists()
+
+
+class TestValidateProposals:
+    """Tests for schema-based proposal validation."""
+
+    def _schema(self):
+        return {
+            "type": "object",
+            "properties": {
+                "threshold": {"type": "number", "minimum": 0, "maximum": 1},
+                "count": {"type": "integer", "minimum": 1, "maximum": 100},
+                "weight": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            },
+        }
+
+    def _config(self):
+        return {"threshold": 0.5, "count": 10, "weight": 0.7}
+
+    def test_valid_proposal_passes(self):
+        from forge_world.core.proposals import validate_proposals
+
+        proposals = [ParameterProposal("threshold", 0.6)]
+        result = validate_proposals(proposals, self._schema(), self._config())
+        assert len(result.valid_proposals) == 1
+        assert len(result.errors) == 0
+
+    def test_unknown_path_rejected(self):
+        from forge_world.core.proposals import validate_proposals
+
+        proposals = [ParameterProposal("nonexistent_param", 0.6)]
+        result = validate_proposals(proposals, self._schema(), self._config())
+        assert len(result.valid_proposals) == 0
+        assert len(result.errors) == 1
+        assert result.errors[0].error_type == "unknown_path"
+
+    def test_out_of_range_rejected(self):
+        from forge_world.core.proposals import validate_proposals
+
+        proposals = [ParameterProposal("threshold", 1.5)]
+        result = validate_proposals(proposals, self._schema(), self._config())
+        assert len(result.valid_proposals) == 0
+        assert len(result.errors) == 1
+        assert result.errors[0].error_type == "out_of_range"
+
+    def test_wrong_type_rejected(self):
+        from forge_world.core.proposals import validate_proposals
+
+        proposals = [ParameterProposal("count", 3.7)]
+        result = validate_proposals(proposals, self._schema(), self._config())
+        assert len(result.valid_proposals) == 0
+        assert len(result.errors) == 1
+        assert result.errors[0].error_type == "wrong_type"
+
+    def test_mixed_valid_and_invalid(self):
+        from forge_world.core.proposals import validate_proposals
+
+        proposals = [
+            ParameterProposal("threshold", 0.6),  # valid
+            ParameterProposal("threshold", 1.5),  # out of range
+            ParameterProposal("weight", 0.8),  # valid
+        ]
+        result = validate_proposals(proposals, self._schema(), self._config())
+        assert len(result.valid_proposals) == 2
+        assert len(result.errors) == 1
+
+    def test_error_summary_format(self):
+        from forge_world.core.proposals import validate_proposals
+
+        proposals = [
+            ParameterProposal("nonexistent", 0.6),
+            ParameterProposal("threshold", 2.0),
+        ]
+        result = validate_proposals(proposals, self._schema(), self._config())
+        summary = result.error_summary()
+        assert "## Proposal Validation Errors" in summary
+        assert "nonexistent" in summary
+        assert "threshold" in summary
+
+    def test_no_errors_empty_summary(self):
+        from forge_world.core.proposals import validate_proposals
+
+        proposals = [ParameterProposal("threshold", 0.6)]
+        result = validate_proposals(proposals, self._schema(), self._config())
+        assert result.error_summary() == ""
+
+    def test_integer_accepts_whole_float(self):
+        """A float like 5.0 should be accepted for integer params."""
+        from forge_world.core.proposals import validate_proposals
+
+        proposals = [ParameterProposal("count", 5.0)]
+        result = validate_proposals(proposals, self._schema(), self._config())
+        assert len(result.valid_proposals) == 1
+        assert len(result.errors) == 0

@@ -42,8 +42,12 @@ def _make_report(
     cm = ConfusionMatrix(
         true_positives=sum(1 for r in item_results if r.passed and r.expected_label == "findings"),
         true_negatives=sum(1 for r in item_results if r.passed and r.expected_label == "clean"),
-        false_positives=sum(1 for r in item_results if not r.passed and r.expected_label == "clean"),
-        false_negatives=sum(1 for r in item_results if not r.passed and r.expected_label == "findings"),
+        false_positives=sum(
+            1 for r in item_results if not r.passed and r.expected_label == "clean"
+        ),
+        false_negatives=sum(
+            1 for r in item_results if not r.passed and r.expected_label == "findings"
+        ),
     )
 
     return BenchmarkReport(
@@ -80,6 +84,7 @@ def _make_multi_report(
     f1s = [sr.report.f1 for sr in seed_reports]
 
     from collections import Counter
+
     item_pass_counts: Counter[str] = Counter()
     item_total_counts: Counter[str] = Counter()
     for sr in seed_reports:
@@ -88,8 +93,7 @@ def _make_multi_report(
             if r.passed:
                 item_pass_counts[r.item_id] += 1
     item_stability = {
-        iid: item_pass_counts[iid] / item_total_counts[iid]
-        for iid in item_total_counts
+        iid: item_pass_counts[iid] / item_total_counts[iid] for iid in item_total_counts
     }
 
     aggregate = AggregateMetrics(
@@ -116,10 +120,12 @@ def _make_multi_report(
 class TestSnapshotManager:
     def test_lock_and_load(self, tmp_path):
         sm = SnapshotManager(tmp_path / "snapshots")
-        report = _make_report([
-            {"id": "item1", "passed": True, "risk": "high"},
-            {"id": "item2", "passed": False, "risk": "low"},
-        ])
+        report = _make_report(
+            [
+                {"id": "item1", "passed": True, "risk": "high"},
+                {"id": "item2", "passed": False, "risk": "low"},
+            ]
+        )
 
         snapshot = sm.lock(report, name="v1")
         assert snapshot.name == "v1"
@@ -150,16 +156,20 @@ class TestSnapshotManager:
     def test_check_no_regressions(self, tmp_path):
         sm = SnapshotManager(tmp_path / "snapshots")
 
-        baseline = _make_report([
-            {"id": "item1", "passed": True},
-            {"id": "item2", "passed": False},
-        ])
+        baseline = _make_report(
+            [
+                {"id": "item1", "passed": True},
+                {"id": "item2", "passed": False},
+            ]
+        )
         sm.lock(baseline)
 
-        current = _make_report([
-            {"id": "item1", "passed": True},
-            {"id": "item2", "passed": False},
-        ])
+        current = _make_report(
+            [
+                {"id": "item1", "passed": True},
+                {"id": "item2", "passed": False},
+            ]
+        )
 
         regression = sm.check(current)
         assert regression.items_regressed == 0
@@ -169,16 +179,20 @@ class TestSnapshotManager:
     def test_check_detects_regression(self, tmp_path):
         sm = SnapshotManager(tmp_path / "snapshots")
 
-        baseline = _make_report([
-            {"id": "item1", "passed": True, "risk": "high"},
-            {"id": "item2", "passed": True, "risk": "medium"},
-        ])
+        baseline = _make_report(
+            [
+                {"id": "item1", "passed": True, "risk": "high"},
+                {"id": "item2", "passed": True, "risk": "medium"},
+            ]
+        )
         sm.lock(baseline)
 
-        current = _make_report([
-            {"id": "item1", "passed": True, "risk": "high"},
-            {"id": "item2", "passed": False, "risk": "low"},
-        ])
+        current = _make_report(
+            [
+                {"id": "item1", "passed": True, "risk": "high"},
+                {"id": "item2", "passed": False, "risk": "low"},
+            ]
+        )
 
         regression = sm.check(current)
         assert regression.items_regressed == 1
@@ -188,14 +202,18 @@ class TestSnapshotManager:
     def test_check_detects_improvement(self, tmp_path):
         sm = SnapshotManager(tmp_path / "snapshots")
 
-        baseline = _make_report([
-            {"id": "item1", "passed": False, "risk": "low"},
-        ])
+        baseline = _make_report(
+            [
+                {"id": "item1", "passed": False, "risk": "low"},
+            ]
+        )
         sm.lock(baseline)
 
-        current = _make_report([
-            {"id": "item1", "passed": True, "risk": "high"},
-        ])
+        current = _make_report(
+            [
+                {"id": "item1", "passed": True, "risk": "high"},
+            ]
+        )
 
         regression = sm.check(current)
         assert regression.items_improved == 1
@@ -204,14 +222,18 @@ class TestSnapshotManager:
     def test_check_detects_false_positive(self, tmp_path):
         sm = SnapshotManager(tmp_path / "snapshots")
 
-        baseline = _make_report([
-            {"id": "clean1", "passed": True, "expected": "clean"},
-        ])
+        baseline = _make_report(
+            [
+                {"id": "clean1", "passed": True, "expected": "clean"},
+            ]
+        )
         sm.lock(baseline)
 
-        current = _make_report([
-            {"id": "clean1", "passed": False, "expected": "clean", "risk": "high"},
-        ])
+        current = _make_report(
+            [
+                {"id": "clean1", "passed": False, "expected": "clean", "risk": "high"},
+            ]
+        )
 
         regression = sm.check(current)
         assert regression.new_false_positives == 1
@@ -228,24 +250,30 @@ class TestSnapshotManager:
         """Items not in baseline should be ignored (not counted as regressions)."""
         sm = SnapshotManager(tmp_path / "snapshots")
 
-        baseline = _make_report([
-            {"id": "item1", "passed": True},
-        ])
+        baseline = _make_report(
+            [
+                {"id": "item1", "passed": True},
+            ]
+        )
         sm.lock(baseline)
 
-        current = _make_report([
-            {"id": "item1", "passed": True},
-            {"id": "item_new", "passed": False},
-        ])
+        current = _make_report(
+            [
+                {"id": "item1", "passed": True},
+                {"id": "item_new", "passed": False},
+            ]
+        )
 
         regression = sm.check(current)
         assert regression.items_regressed == 0
 
     def test_snapshot_json_is_valid(self, tmp_path):
         sm = SnapshotManager(tmp_path / "snapshots")
-        report = _make_report([
-            {"id": "item1", "passed": True, "risk": "high"},
-        ])
+        report = _make_report(
+            [
+                {"id": "item1", "passed": True, "risk": "high"},
+            ]
+        )
         sm.lock(report, name="test")
 
         path = tmp_path / "snapshots" / "test.json"
@@ -270,11 +298,13 @@ class TestSnapshotManager:
 class TestGetFailedItemIds:
     def test_get_failed_single_seed(self, tmp_path):
         sm = SnapshotManager(tmp_path / "snapshots")
-        report = _make_report([
-            {"id": "item1", "passed": True},
-            {"id": "item2", "passed": False},
-            {"id": "item3", "passed": False},
-        ])
+        report = _make_report(
+            [
+                {"id": "item1", "passed": True},
+                {"id": "item2", "passed": False},
+                {"id": "item3", "passed": False},
+            ]
+        )
         sm.lock(report)
 
         failed = sm.get_failed_item_ids()
@@ -297,10 +327,12 @@ class TestGetFailedItemIds:
 
     def test_no_failures_empty(self, tmp_path):
         sm = SnapshotManager(tmp_path / "snapshots")
-        report = _make_report([
-            {"id": "item1", "passed": True},
-            {"id": "item2", "passed": True},
-        ])
+        report = _make_report(
+            [
+                {"id": "item1", "passed": True},
+                {"id": "item2", "passed": True},
+            ]
+        )
         sm.lock(report)
 
         failed = sm.get_failed_item_ids()
@@ -432,7 +464,10 @@ class TestMultiSeedSnapshots:
         snap2 = sm.lock(multi2)
         assert snap2.exploration_count == 2
         # Baseline = avg(snap1 exploration rate, snap2 exploration rate)
-        expected = (snap1.exploration_metrics["mean_pass_rate"] + snap2.exploration_metrics["mean_pass_rate"]) / 2
+        expected = (
+            snap1.exploration_metrics["mean_pass_rate"]
+            + snap2.exploration_metrics["mean_pass_rate"]
+        ) / 2
         assert abs(snap2.exploration_baseline - expected) < 0.001
 
     def test_exploration_regression_detected(self, tmp_path):
@@ -441,27 +476,35 @@ class TestMultiSeedSnapshots:
 
         # Baseline: stable=100%, exploration=100%
         baseline = _make_multi_report(
-            stable_items_by_seed={42: [
-                {"id": "item1", "passed": True},
-                {"id": "item2", "passed": True},
-            ]},
-            exploration_items_by_seed={999: [
-                {"id": "item1", "passed": True},
-                {"id": "item2", "passed": True},
-            ]},
+            stable_items_by_seed={
+                42: [
+                    {"id": "item1", "passed": True},
+                    {"id": "item2", "passed": True},
+                ]
+            },
+            exploration_items_by_seed={
+                999: [
+                    {"id": "item1", "passed": True},
+                    {"id": "item2", "passed": True},
+                ]
+            },
         )
         sm.lock(baseline)
 
         # Current: stable still good, but exploration drops to 0%
         current = _make_multi_report(
-            stable_items_by_seed={42: [
-                {"id": "item1", "passed": True},
-                {"id": "item2", "passed": True},
-            ]},
-            exploration_items_by_seed={888: [
-                {"id": "item1", "passed": False},
-                {"id": "item2", "passed": False},
-            ]},
+            stable_items_by_seed={
+                42: [
+                    {"id": "item1", "passed": True},
+                    {"id": "item2", "passed": True},
+                ]
+            },
+            exploration_items_by_seed={
+                888: [
+                    {"id": "item1", "passed": False},
+                    {"id": "item2", "passed": False},
+                ]
+            },
         )
         regression = sm.check(current)
         assert regression.exploration_regressed
@@ -485,10 +528,12 @@ class TestMultiSeedSnapshots:
         sm = SnapshotManager(tmp_path / "snapshots")
 
         # Lock single-seed baseline
-        single = _make_report([
-            {"id": "item1", "passed": True},
-            {"id": "item2", "passed": True},
-        ])
+        single = _make_report(
+            [
+                {"id": "item1", "passed": True},
+                {"id": "item2", "passed": True},
+            ]
+        )
         sm.lock(single)
 
         # Check with multi-seed report

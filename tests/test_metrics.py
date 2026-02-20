@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from forge_world.core.metrics import (
-    ActionableCluster,
     ConfusionMatrix,
     compute_category_metrics,
     compute_confusion_matrix,
@@ -16,7 +15,9 @@ from forge_world.core.metrics import (
 
 class TestConfusionMatrix:
     def test_perfect_classification(self):
-        cm = ConfusionMatrix(true_positives=10, true_negatives=5, false_positives=0, false_negatives=0)
+        cm = ConfusionMatrix(
+            true_positives=10, true_negatives=5, false_positives=0, false_negatives=0
+        )
         assert cm.sensitivity == 1.0
         assert cm.specificity == 1.0
         assert cm.fpr == 0.0
@@ -24,13 +25,17 @@ class TestConfusionMatrix:
         assert cm.pass_rate == 1.0
 
     def test_all_false_negatives(self):
-        cm = ConfusionMatrix(true_positives=0, true_negatives=5, false_positives=0, false_negatives=10)
+        cm = ConfusionMatrix(
+            true_positives=0, true_negatives=5, false_positives=0, false_negatives=10
+        )
         assert cm.sensitivity == 0.0
         assert cm.specificity == 1.0
         assert cm.fpr == 0.0
 
     def test_with_false_positives(self):
-        cm = ConfusionMatrix(true_positives=8, true_negatives=3, false_positives=2, false_negatives=2)
+        cm = ConfusionMatrix(
+            true_positives=8, true_negatives=3, false_positives=2, false_negatives=2
+        )
         assert cm.fpr > 0
         assert cm.sensitivity == 8 / 10
         assert cm.specificity == 3 / 5
@@ -42,7 +47,9 @@ class TestConfusionMatrix:
         assert cm.pass_rate == 0.0
 
     def test_to_dict(self):
-        cm = ConfusionMatrix(true_positives=5, true_negatives=3, false_positives=1, false_negatives=1)
+        cm = ConfusionMatrix(
+            true_positives=5, true_negatives=3, false_positives=1, false_negatives=1
+        )
         d = cm.to_dict()
         assert d["tp"] == 5
         assert d["fp"] == 1
@@ -167,9 +174,7 @@ class TestFindFailureClusters:
         ]
         clusters = find_failure_clusters(results)
         assert len(clusters) >= 1
-        cat_cluster = next(
-            (c for c in clusters if c.pattern == "category:rsiil"), None
-        )
+        cat_cluster = next((c for c in clusters if c.pattern == "category:rsiil"), None)
         assert cat_cluster is not None
         assert cat_cluster.count == 2
 

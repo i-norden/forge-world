@@ -169,7 +169,9 @@ class TestLabeledDatasetProtocol:
         """A class implementing items(seed, sample_size) satisfies LabeledDataset."""
 
         class SeedAwareDataset:
-            def items(self, seed: int | None = None, sample_size: int | None = None) -> list[LabeledItem]:
+            def items(
+                self, seed: int | None = None, sample_size: int | None = None
+            ) -> list[LabeledItem]:
                 return []
 
             def categories(self) -> list[str]:
@@ -197,8 +199,10 @@ class TestTieredDatasetProtocol:
         class MyTieredDataset:
             def items(self, seed=None, sample_size=None):
                 return []
+
             def categories(self):
                 return []
+
             def tiers(self) -> dict[str, list[str]]:
                 return {"smoke": ["cat_a"], "full": ["cat_a", "cat_b"]}
 
@@ -210,6 +214,7 @@ class TestTieredDatasetProtocol:
         class PlainDataset:
             def items(self, seed=None, sample_size=None):
                 return []
+
             def categories(self):
                 return []
 
@@ -239,8 +244,10 @@ class TestDiagnosticsProtocol:
             def diagnose(self, failures):
                 return [
                     DiagnosticCluster(
-                        label="test", description="test desc",
-                        item_ids=["a"], suggested_action="fix it",
+                        label="test",
+                        description="test desc",
+                        item_ids=["a"],
+                        suggested_action="fix it",
                         achievable=True,
                     )
                 ]
@@ -251,4 +258,5 @@ class TestDiagnosticsProtocol:
     def test_non_diagnostics_not_instance(self):
         class NotDiag:
             pass
+
         assert not isinstance(NotDiag(), Diagnostics)

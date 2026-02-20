@@ -79,7 +79,10 @@ def _build_runner(mod, *, quiet: bool = False, analysis_cache=None):
 
     if quiet:
         return BenchmarkRunner(
-            pipeline=pipeline, aggregator=aggregator, dataset=dataset, rules=rules,
+            pipeline=pipeline,
+            aggregator=aggregator,
+            dataset=dataset,
+            rules=rules,
             analysis_cache=analysis_cache,
         )
 
@@ -150,6 +153,7 @@ def _build_analysis_cache(cache_dir: str, no_cache: bool):
     if no_cache:
         return None
     from forge_world.core.cache import AnalysisCache
+
     return AnalysisCache(cache_dir)
 
 
@@ -179,6 +183,14 @@ def _print_report_table(report):
         console.print(
             f"[red bold]WARNING: {report.confusion_matrix.false_positives} "
             f"false positive(s)![/red bold]"
+        )
+
+    if getattr(report, "performance", None) is not None:
+        perf = report.performance
+        console.print(
+            f"[bold]Latency:[/bold] mean={perf.latency_mean_ms:.1f}ms "
+            f"p95={perf.latency_p95_ms:.1f}ms | "
+            f"[bold]Throughput:[/bold] {perf.throughput_items_per_sec:.1f} items/sec"
         )
     console.print()
 
@@ -223,13 +235,20 @@ def _print_multi_report_table(multi_report):
     console.print(f"[bold]Mean F1:[/bold] {am.mean_f1:.4f}")
 
     if am.worst_case_fpr > 0:
-        console.print("[red bold]WARNING: False positives detected on at least one seed![/red bold]")
+        console.print(
+            "[red bold]WARNING: False positives detected on at least one seed![/red bold]"
+        )
+
+    if getattr(multi_report, "performance", None) is not None:
+        perf = multi_report.performance
+        console.print(
+            f"[bold]Latency:[/bold] mean={perf.latency_mean_ms:.1f}ms "
+            f"p95={perf.latency_p95_ms:.1f}ms | "
+            f"[bold]Throughput:[/bold] {perf.throughput_items_per_sec:.1f} items/sec"
+        )
 
     # Unstable items
-    unstable = [
-        (iid, stab) for iid, stab in am.item_stability.items()
-        if 0 < stab < 1
-    ]
+    unstable = [(iid, stab) for iid, stab in am.item_stability.items() if 0 < stab < 1]
     if unstable:
         console.print()
         console.print(f"[yellow]{len(unstable)} unstable item(s) across seeds:[/yellow]")
@@ -291,11 +310,18 @@ def _load_diagnostics(mod, report):
 
 
 @click.group()
-@click.option("--module", "-m", default=None, help="Module exporting pipeline factories (e.g. snoopy.forge_world)")
+@click.option(
+    "--module",
+    "-m",
+    default=None,
+    help="Module exporting pipeline factories (e.g. snoopy.forge_world)",
+)
 @click.option("--snapshots-dir", default=".forge-world/snapshots", help="Directory for snapshots")
 @click.option("--cache-dir", default=".forge-world/cache", help="Directory for analysis cache")
 @click.option("--no-cache", is_flag=True, help="Disable disk analysis cache")
-@click.option("--quiet", "-q", is_flag=True, help="Suppress per-item progress output (for agent/CI use)")
+@click.option(
+    "--quiet", "-q", is_flag=True, help="Suppress per-item progress output (for agent/CI use)"
+)
 @click.pass_context
 def cli(ctx, module: str | None, snapshots_dir: str, cache_dir: str, no_cache: bool, quiet: bool):
     """forge-world: benchmark-modify-benchmark harness."""
@@ -313,11 +339,19 @@ def cli(ctx, module: str | None, snapshots_dir: str, cache_dir: str, no_cache: b
 @click.option("--seeds", default=None, help="Stable seeds, comma-separated (e.g. 42,137,256)")
 @click.option("--exploration-seeds", default=1, type=int, help="Number of exploration seeds")
 @click.option("--single-seed", default=None, type=int, help="Legacy single-seed mode")
-@click.option("--sample-size", "-M", default=None, type=int, help="Number of seeded-random items per seed")
-@click.option("--tier", "-t", default=None, help="Run only items in this tier (e.g. smoke, standard, full)")
+@click.option(
+    "--sample-size", "-M", default=None, type=int, help="Number of seeded-random items per seed"
+)
+@click.option(
+    "--tier", "-t", default=None, help="Run only items in this tier (e.g. smoke, standard, full)"
+)
 @click.option("--only-failures", is_flag=True, help="Re-run only items that failed in baseline")
 @click.option("--then-full", is_flag=True, help="After --only-failures, also run the full suite")
-@click.option("--failure-baseline", default="baseline", help="Snapshot to read failures from (default: baseline)")
+@click.option(
+    "--failure-baseline",
+    default="baseline",
+    help="Snapshot to read failures from (default: baseline)",
+)
 @click.pass_context
 def bench(
     ctx,
@@ -344,6 +378,7 @@ def bench(
     item_filter: set[str] | None = None
     if only_failures:
         from forge_world.core.snapshots import SnapshotManager
+
         sm = SnapshotManager(ctx.obj["snapshots_dir"])
         try:
             item_filter = sm.get_failed_item_ids(failure_baseline)
@@ -351,14 +386,19 @@ def bench(
             console.print(f"[red]{exc}[/red]")
             sys.exit(1)
         if not quiet:
-            console.print(f"[bold]Re-running {len(item_filter)} failed items from '{failure_baseline}'[/bold]")
+            console.print(
+                f"[bold]Re-running {len(item_filter)} failed items from '{failure_baseline}'[/bold]"
+            )
 
     if single_seed is not None:
         # Legacy single-seed mode
         if not quiet:
             console.print(f"[bold]Running single-seed benchmark (seed={single_seed})...[/bold]")
         report = runner.run(
-            seed=single_seed, sample_size=sample_size, tier=tier, item_filter=item_filter,
+            seed=single_seed,
+            sample_size=sample_size,
+            tier=tier,
+            item_filter=item_filter,
         )
         if json_out:
             click.echo(json.dumps(report.to_dict(), indent=2, default=str))
@@ -385,7 +425,10 @@ def bench(
                 f"({len(strategy.stable_seeds)} stable + {strategy.n_exploration_seeds} exploration)...[/bold]"
             )
         multi_report = runner.run_multi(
-            strategy, sample_size=sample_size, tier=tier, item_filter=item_filter,
+            strategy,
+            sample_size=sample_size,
+            tier=tier,
+            item_filter=item_filter,
         )
         if json_out:
             click.echo(json.dumps(multi_report.to_dict(), indent=2, default=str))
@@ -406,9 +449,7 @@ def bench(
     if analysis_cache is not None and not quiet:
         stats = analysis_cache.stats
         if stats["hits"] > 0:
-            console.print(
-                f"[dim]Cache: {stats['hits']} hits, {stats['misses']} misses[/dim]"
-            )
+            console.print(f"[dim]Cache: {stats['hits']} hits, {stats['misses']} misses[/dim]")
 
 
 @cli.command()
@@ -416,7 +457,9 @@ def bench(
 @click.option("--seeds", default=None, help="Stable seeds, comma-separated")
 @click.option("--exploration-seeds", default=1, type=int, help="Number of exploration seeds")
 @click.option("--single-seed", default=None, type=int, help="Legacy single-seed mode")
-@click.option("--sample-size", "-M", default=None, type=int, help="Number of seeded-random items per seed")
+@click.option(
+    "--sample-size", "-M", default=None, type=int, help="Number of seeded-random items per seed"
+)
 @click.option("--tier", "-t", default=None, help="Run only items in this tier")
 @click.pass_context
 def lock(
@@ -462,9 +505,7 @@ def lock(
         if not quiet:
             _print_multi_report_table(multi_report)
         snapshot = sm.lock(multi_report, name=name)
-        console.print(
-            f"[green]Locked multi-seed snapshot '{name}' at {snapshot.timestamp}[/green]"
-        )
+        console.print(f"[green]Locked multi-seed snapshot '{name}' at {snapshot.timestamp}[/green]")
 
 
 @cli.command()
@@ -473,7 +514,9 @@ def lock(
 @click.option("--seeds", default=None, help="Stable seeds, comma-separated")
 @click.option("--exploration-seeds", default=1, type=int, help="Number of exploration seeds")
 @click.option("--single-seed", default=None, type=int, help="Legacy single-seed mode")
-@click.option("--sample-size", "-M", default=None, type=int, help="Number of seeded-random items per seed")
+@click.option(
+    "--sample-size", "-M", default=None, type=int, help="Number of seeded-random items per seed"
+)
 @click.option("--tier", "-t", default=None, help="Run only items in this tier")
 @click.option("--only-failures", is_flag=True, help="Re-run only items that failed in baseline")
 @click.option("--failure-baseline", default="baseline", help="Snapshot to read failures from")
@@ -515,7 +558,10 @@ def check(
         if not quiet:
             console.print(f"[bold]Running single-seed benchmark (seed={single_seed})...[/bold]")
         report = runner.run(
-            seed=single_seed, sample_size=sample_size, tier=tier, item_filter=item_filter,
+            seed=single_seed,
+            sample_size=sample_size,
+            tier=tier,
+            item_filter=item_filter,
         )
     else:
         strategy = _parse_seed_strategy(seeds, exploration_seeds)
@@ -525,7 +571,10 @@ def check(
                 f"({len(strategy.stable_seeds)} stable + {strategy.n_exploration_seeds} exploration)...[/bold]"
             )
         report = runner.run_multi(
-            strategy, sample_size=sample_size, tier=tier, item_filter=item_filter,
+            strategy,
+            sample_size=sample_size,
+            tier=tier,
+            item_filter=item_filter,
         )
 
     try:
@@ -568,9 +617,7 @@ def check(
             )
 
         if regression.has_regressions:
-            console.print(
-                f"[red]{regression.items_regressed} item(s) regressed[/red]"
-            )
+            console.print(f"[red]{regression.items_regressed} item(s) regressed[/red]")
             for r in regression.regressions:
                 seed_info = f" [seed={r.seed}]" if r.seed is not None else ""
                 console.print(
@@ -581,9 +628,7 @@ def check(
             console.print("[green]No regressions![/green]")
 
         if regression.items_improved > 0:
-            console.print(
-                f"[green]{regression.items_improved} item(s) improved[/green]"
-            )
+            console.print(f"[green]{regression.items_improved} item(s) improved[/green]")
 
         if regression.unstable_items:
             console.print()
@@ -601,7 +646,9 @@ def check(
 @click.option("--seeds", default=None, help="Stable seeds, comma-separated")
 @click.option("--exploration-seeds", default=1, type=int, help="Number of exploration seeds")
 @click.option("--single-seed", default=None, type=int, help="Legacy single-seed mode")
-@click.option("--sample-size", "-M", default=None, type=int, help="Number of seeded-random items per seed")
+@click.option(
+    "--sample-size", "-M", default=None, type=int, help="Number of seeded-random items per seed"
+)
 @click.option("--tier", "-t", default=None, help="Run only items in this tier")
 @click.pass_context
 def analyze(
@@ -679,7 +726,9 @@ def analyze(
 @click.option("--seeds", default=None, help="Stable seeds, comma-separated")
 @click.option("--exploration-seeds", default=1, type=int, help="Number of exploration seeds")
 @click.option("--single-seed", default=None, type=int, help="Legacy single-seed mode")
-@click.option("--sample-size", "-M", default=None, type=int, help="Number of seeded-random items per seed")
+@click.option(
+    "--sample-size", "-M", default=None, type=int, help="Number of seeded-random items per seed"
+)
 @click.option("--tier", "-t", default=None, help="Run only items in this tier")
 @click.pass_context
 def diff_cmd(
@@ -760,7 +809,9 @@ def cache_clear(ctx, config_hash: str | None):
 @click.option("--single-seed", default=None, type=int, help="Single-seed mode")
 @click.option("--seeds", default=None, help="Stable seeds, comma-separated")
 @click.option("--exploration-seeds", default=1, type=int, help="Number of exploration seeds")
-@click.option("--sample-size", "-M", default=None, type=int, help="Number of seeded-random items per seed")
+@click.option(
+    "--sample-size", "-M", default=None, type=int, help="Number of seeded-random items per seed"
+)
 @click.option("--tier", "-t", default=None, help="Run only items in this tier")
 @click.option("--json-output", "json_out", is_flag=True, help="Machine-readable JSON output")
 @click.pass_context
@@ -811,22 +862,55 @@ def sensitivity(
 
 
 @cli.command()
-@click.option("--agent-command", default=None, help="Command to invoke the agent (use {context_file} placeholder)")
+@click.option(
+    "--agent-command",
+    default=None,
+    help="Command to invoke the agent (use {context_file} placeholder)",
+)
 @click.option("--max-iterations", default=None, type=int, help="Maximum evolution iterations")
 @click.option("--patience", default=3, type=int, help="Stop after N rounds without improvement")
 @click.option("--baseline", default="baseline", help="Baseline snapshot name")
 @click.option("--single-seed", default=None, type=int, help="Single-seed mode")
 @click.option("--seeds", default=None, help="Stable seeds, comma-separated")
 @click.option("--exploration-seeds", default=1, type=int, help="Number of exploration seeds")
-@click.option("--sample-size", "-M", default=None, type=int, help="Number of seeded-random items per seed")
+@click.option(
+    "--sample-size", "-M", default=None, type=int, help="Number of seeded-random items per seed"
+)
 @click.option("--tier", "-t", default=None, help="Run only items in this tier")
 @click.option("--json-output", "json_out", is_flag=True, help="Machine-readable JSON output")
-@click.option("--sensitivity/--no-sensitivity", "run_sensitivity", default=True, help="Run sensitivity analysis before evolving")
-@click.option("--exploration-budget", default=0, type=int, help="Number of lateral/worse moves allowed (0 = greedy)")
-@click.option("--temperature", default=1.0, type=float, help="Initial exploration acceptance temperature")
-@click.option("--temperature-decay", default=0.8, type=float, help="Temperature decay per iteration")
-@click.option("--pareto-metrics", default=None, help="Comma-separated metrics for Pareto acceptance")
-@click.option("--decompose/--no-decompose", "decompose_changes", default=True, help="Decompose multi-file changes")
+@click.option(
+    "--sensitivity/--no-sensitivity",
+    "run_sensitivity",
+    default=True,
+    help="Run sensitivity analysis before evolving",
+)
+@click.option(
+    "--exploration-budget",
+    default=0,
+    type=int,
+    help="Number of lateral/worse moves allowed (0 = greedy)",
+)
+@click.option(
+    "--temperature", default=1.0, type=float, help="Initial exploration acceptance temperature"
+)
+@click.option(
+    "--temperature-decay", default=0.8, type=float, help="Temperature decay per iteration"
+)
+@click.option(
+    "--decompose/--no-decompose",
+    "decompose_changes",
+    default=True,
+    help="Decompose multi-file changes",
+)
+@click.option(
+    "--auto-tune/--no-auto-tune",
+    "auto_tune",
+    default=False,
+    help="Enable Optuna auto-tuning of numeric params after acceptance",
+)
+@click.option(
+    "--auto-tune-trials", default=20, type=int, help="Number of Optuna trials per auto-tune round"
+)
 @click.pass_context
 def evolve(
     ctx,
@@ -844,8 +928,9 @@ def evolve(
     exploration_budget: int,
     temperature: float,
     temperature_decay: float,
-    pareto_metrics: str | None,
     decompose_changes: bool,
+    auto_tune: bool,
+    auto_tune_trials: int,
 ):
     """Autonomous bench-modify-bench evolution loop."""
     from forge_world.core.evolve import EvolutionConfig, EvolutionLoop
@@ -865,31 +950,43 @@ def evolve(
 
     resolved_agent_command = agent_command or evolve_toml.get("agent_command")
     if not resolved_agent_command:
-        console.print("[red]No agent command specified. Use --agent-command or set in forge-world.toml[/red]")
+        console.print(
+            "[red]No agent command specified. Use --agent-command or set in forge-world.toml[/red]"
+        )
         sys.exit(1)
 
     resolved_max_iterations = max_iterations or evolve_toml.get("max_iterations", 10)
-    hard_constraints = evolve_toml.get("hard_constraints", [{"metric": "fpr", "op": "<=", "value": 0}])
-    optimization_target = evolve_toml.get(
-        "optimization_target", {"metric": "sensitivity", "direction": "max"}
+    hard_constraints = evolve_toml.get(
+        "hard_constraints", [{"metric": "fpr", "op": "<=", "value": 0}]
     )
 
-    parsed_pareto: list[str] | None = None
-    if pareto_metrics:
-        parsed_pareto = [m.strip() for m in pareto_metrics.split(",")]
+    # Support both singular and plural optimization target(s)
+    if "optimization_targets" in evolve_toml:
+        optimization_targets = evolve_toml["optimization_targets"]
+    elif "optimization_target" in evolve_toml:
+        optimization_targets = [evolve_toml["optimization_target"]]
+    else:
+        optimization_targets = [{"metric": "sensitivity", "direction": "max"}]
+
+    # Resolve auto-tune: CLI flag > TOML > default (False)
+    resolved_auto_tune = auto_tune or evolve_toml.get("auto_tune", False)
+    resolved_auto_tune_trials = (
+        auto_tune_trials if auto_tune_trials != 20 else evolve_toml.get("auto_tune_trials", 20)
+    )
 
     config = EvolutionConfig(
         agent_command=resolved_agent_command,
         max_iterations=resolved_max_iterations,
         hard_constraints=hard_constraints,
-        optimization_target=optimization_target,
+        optimization_targets=optimization_targets,
         convergence_patience=patience,
         run_sensitivity=run_sensitivity,
         decompose_changes=decompose_changes,
         exploration_budget=exploration_budget,
         exploration_temperature=temperature,
         temperature_decay=temperature_decay,
-        pareto_metrics=parsed_pareto,
+        auto_tune=resolved_auto_tune,
+        auto_tune_trials=resolved_auto_tune_trials,
     )
 
     # Build run kwargs for the evolution loop

@@ -13,6 +13,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+tuning = ["optuna>=4.0"]
 dev = [
     "pytest>=8.0",
     "ruff>=0.15",
