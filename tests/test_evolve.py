@@ -170,6 +170,7 @@ class TestEvolutionLoop:
             agent_command="echo test",
             max_iterations=3,
             convergence_patience=10,  # High so we hit max_iterations
+            run_sensitivity=False,
         )
         loop = EvolutionLoop(config=config, runner=runner, snapshot_manager=sm)
 
@@ -195,6 +196,7 @@ class TestEvolutionLoop:
             agent_command="echo test",
             max_iterations=20,
             convergence_patience=2,
+            run_sensitivity=False,
         )
         loop = EvolutionLoop(config=config, runner=runner, snapshot_manager=sm)
 
@@ -222,6 +224,8 @@ class TestEvolutionLoop:
             agent_command="echo test",
             max_iterations=1,
             hard_constraints=[{"metric": "fpr", "op": "<=", "value": 0}],
+            run_sensitivity=False,
+            decompose_changes=False,
         )
         loop = EvolutionLoop(config=config, runner=runner, snapshot_manager=sm)
 
@@ -251,6 +255,8 @@ class TestEvolutionLoop:
             agent_command="echo test",
             max_iterations=1,
             optimization_target={"metric": "pass_rate", "direction": "max"},
+            run_sensitivity=False,
+            decompose_changes=False,
         )
         loop = EvolutionLoop(config=config, runner=runner, snapshot_manager=sm)
 
@@ -279,6 +285,7 @@ class TestEvolutionLoop:
         config = EvolutionConfig(
             agent_command="echo test",
             max_iterations=1,
+            run_sensitivity=False,
         )
         loop = EvolutionLoop(config=config, runner=runner, snapshot_manager=sm)
 
@@ -302,6 +309,7 @@ class TestEvolutionLoop:
         config = EvolutionConfig(
             agent_command="false",
             max_iterations=5,
+            run_sensitivity=False,
         )
         loop = EvolutionLoop(config=config, runner=runner, snapshot_manager=sm)
 
@@ -349,3 +357,211 @@ class TestExtractMetrics:
         assert "sensitivity" in metrics
         assert "fpr" in metrics
         assert "f1" in metrics
+
+
+class TestShouldAccept:
+    def test_improved_accepted(self):
+        config = EvolutionConfig(
+            agent_command="echo test",
+            optimization_target={"metric": "sensitivity", "direction": "max"},
+        )
+        loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
+        accept, reason = loop._should_accept(
+            {"sensitivity": 0.8}, {"sensitivity": 0.85}, 1, 1.0, 0
+        )
+        assert accept is True
+        assert reason == "improved"
+
+    def test_not_improved_greedy_rejected(self):
+        config = EvolutionConfig(
+            agent_command="echo test",
+            optimization_target={"metric": "sensitivity", "direction": "max"},
+            exploration_budget=0,
+        )
+        loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
+        accept, reason = loop._should_accept(
+            {"sensitivity": 0.8}, {"sensitivity": 0.75}, 1, 1.0, 0
+        )
+        assert accept is False
+        assert reason == "not_improved"
+
+    def test_exploration_with_budget(self):
+        """Worse metrics can be accepted with exploration budget and high temperature."""
+        config = EvolutionConfig(
+            agent_command="echo test",
+            optimization_target={"metric": "sensitivity", "direction": "max"},
+            exploration_budget=5,
+        )
+        loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
+        # With very high temperature and very small delta, should almost always accept
+        # Use a very high temperature to ensure acceptance
+        accept, reason = loop._should_accept(
+            {"sensitivity": 0.80}, {"sensitivity": 0.80}, 1, 100.0, 5
+        )
+        # Equal metrics with exploration budget → should accept
+        assert accept is True
+        assert reason == "exploration"
+
+    def test_exploration_budget_exhausted(self):
+        config = EvolutionConfig(
+            agent_command="echo test",
+            optimization_target={"metric": "sensitivity", "direction": "max"},
+            exploration_budget=5,
+        )
+        loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
+        # Budget is 0, should reject even though config has budget
+        accept, reason = loop._should_accept(
+            {"sensitivity": 0.8}, {"sensitivity": 0.75}, 1, 1.0, 0
+        )
+        assert accept is False
+        assert reason == "not_improved"
+
+    def test_pareto_improving_accepted(self):
+        config = EvolutionConfig(
+            agent_command="echo test",
+            optimization_target={"metric": "sensitivity", "direction": "max"},
+            pareto_metrics=["sensitivity", "f1"],
+        )
+        loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
+        # Sensitivity same, f1 improved
+        accept, reason = loop._should_accept(
+            {"sensitivity": 0.8, "f1": 0.75, "fpr": 0.0},
+            {"sensitivity": 0.8, "f1": 0.80, "fpr": 0.0},
+            1, 1.0, 0,
+        )
+        assert accept is True
+        assert reason == "pareto_improved"
+
+    def test_pareto_worsening_rejected(self):
+        config = EvolutionConfig(
+            agent_command="echo test",
+            optimization_target={"metric": "sensitivity", "direction": "max"},
+            pareto_metrics=["sensitivity", "f1"],
+            hard_constraints=[{"metric": "fpr", "op": "<=", "value": 0}],
+        )
+        loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
+        # f1 improved but fpr violated constraint
+        accept, reason = loop._should_accept(
+            {"sensitivity": 0.8, "f1": 0.75, "fpr": 0.0},
+            {"sensitivity": 0.8, "f1": 0.80, "fpr": 0.05},
+            1, 1.0, 0,
+        )
+        assert accept is False
+        assert reason == "not_improved"
+
+
+class TestDetectConvergence:
+    def test_not_enough_history(self):
+        config = EvolutionConfig(
+            agent_command="echo test",
+            convergence_window=5,
+        )
+        loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
+        converged, reason = loop._detect_convergence([0.8, 0.81, 0.82])
+        assert converged is False
+
+    def test_oscillation_detected(self):
+        config = EvolutionConfig(
+            agent_command="echo test",
+            convergence_window=5,
+            min_progress=0.001,
+        )
+        loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
+        # Values oscillate but net change is near zero
+        converged, reason = loop._detect_convergence([0.80, 0.82, 0.80, 0.82, 0.80])
+        assert converged is True
+        assert reason == "oscillating"
+
+    def test_plateau_detected(self):
+        config = EvolutionConfig(
+            agent_command="echo test",
+            convergence_window=5,
+            min_progress=0.001,
+        )
+        loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
+        # All values nearly identical
+        converged, reason = loop._detect_convergence([0.80, 0.80, 0.80, 0.80, 0.80])
+        assert converged is True
+        assert reason == "plateau"
+
+    def test_not_converged_with_progress(self):
+        config = EvolutionConfig(
+            agent_command="echo test",
+            convergence_window=5,
+            min_progress=0.001,
+        )
+        loop = EvolutionLoop(config=config, runner=MagicMock(), snapshot_manager=MagicMock())
+        # Steady improvement
+        converged, reason = loop._detect_convergence([0.80, 0.82, 0.84, 0.86, 0.88])
+        assert converged is False
+
+    def test_backward_compat_defaults(self):
+        """Default config produces identical behavior to current (greedy, no exploration)."""
+        config = EvolutionConfig(agent_command="echo test")
+        assert config.exploration_budget == 0
+        assert config.pareto_metrics is None
+        assert config.convergence_window == 5
+
+
+class TestDecomposeAndTest:
+    @patch("forge_world.core.evolve.subprocess.run")
+    def test_single_file_skips_decomposition(self, mock_run):
+        config = EvolutionConfig(
+            agent_command="echo test",
+            decompose_changes=True,
+            run_sensitivity=False,
+        )
+        runner = MagicMock()
+        loop = EvolutionLoop(config=config, runner=runner, snapshot_manager=MagicMock())
+
+        # Mock _get_changed_files to return 1 file
+        with patch.object(loop, "_get_changed_files", return_value=["file.py"]):
+            accepted, metrics = loop._decompose_and_test({"sensitivity": 0.8})
+
+        assert accepted == ["file.py"]
+        assert metrics is None  # Skip decomposition
+
+    @patch("forge_world.core.evolve.subprocess.run")
+    def test_decomposition_disabled(self, mock_run):
+        """decompose_changes=False → skip entirely (decompose not called)."""
+        report = _make_report()
+        runner = MagicMock()
+        runner.run.return_value = report
+        sm = MagicMock(spec=SnapshotManager)
+        sm.check.side_effect = FileNotFoundError("no baseline")
+
+        mock_run.return_value = MagicMock(returncode=0, stdout="M file.py", stderr="")
+
+        config = EvolutionConfig(
+            agent_command="echo test",
+            max_iterations=1,
+            decompose_changes=False,
+            run_sensitivity=False,
+        )
+        loop = EvolutionLoop(config=config, runner=runner, snapshot_manager=sm)
+
+        with (
+            patch.object(loop, "_check_for_changes", return_value=True),
+            patch.object(loop, "_decompose_and_test") as mock_decompose,
+        ):
+            loop.run()
+
+        mock_decompose.assert_not_called()
+
+    @patch("forge_world.core.evolve.subprocess.run")
+    def test_git_error_falls_back(self, mock_run):
+        config = EvolutionConfig(
+            agent_command="echo test",
+            decompose_changes=True,
+            run_sensitivity=False,
+        )
+        runner = MagicMock()
+        loop = EvolutionLoop(config=config, runner=runner, snapshot_manager=MagicMock())
+
+        # Make git diff fail
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error")
+        with patch.object(loop, "_get_changed_files", return_value=["a.py", "b.py"]):
+            accepted, metrics = loop._decompose_and_test({"sensitivity": 0.8})
+
+        # Graceful fallback
+        assert metrics is None

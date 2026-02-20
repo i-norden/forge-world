@@ -6,6 +6,8 @@ failure analysis, method effectiveness, near-misses, config schema, and
 regression data.
 
 Supports multi-seed reports with seed variance and item stability info.
+Includes iteration memory, sensitivity analysis, exploration state, and
+enhanced failure clustering.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from forge_world.core.metrics import (
+    find_actionable_failure_clusters,
     find_failure_clusters,
     find_near_misses,
 )
@@ -67,6 +70,12 @@ class EvolutionContext:
     # Domain-specific diagnostics
     diagnostic_clusters: list[dict[str, Any]] = field(default_factory=list)
 
+    # New: memory, sensitivity, exploration, evolve mode
+    memory_summary: str = ""
+    sensitivity_summary: str = ""
+    exploration_state: dict[str, Any] = field(default_factory=dict)
+    evolve_mode: bool = False
+
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
             "current_metrics": self.current_metrics,
@@ -94,17 +103,24 @@ class EvolutionContext:
             d["sample_size"] = self.sample_size
         if self.diagnostic_clusters:
             d["diagnostic_clusters"] = self.diagnostic_clusters
+        if self.memory_summary:
+            d["memory_summary"] = self.memory_summary
+        if self.sensitivity_summary:
+            d["sensitivity_summary"] = self.sensitivity_summary
+        if self.exploration_state:
+            d["exploration_state"] = self.exploration_state
+        d["evolve_mode"] = self.evolve_mode
         return d
 
     def to_prompt_context(self) -> str:
         """Serialize to markdown optimized for LLM consumption."""
         lines: list[str] = []
 
-        # Header
+        # 1. Header
         lines.append("# Evolution Context")
         lines.append("")
 
-        # Current metrics
+        # 2. Current metrics
         lines.append("## Current Performance")
         m = self.current_metrics
         lines.append(f"- Pass rate: {m.get('pass_rate', 'N/A')}")
@@ -116,7 +132,30 @@ class EvolutionContext:
             lines.append(f"- Sample size (M): {self.sample_size}")
         lines.append("")
 
-        # Seed variance section (multi-seed)
+        # 3. Iteration History (from memory)
+        if self.memory_summary:
+            lines.append(self.memory_summary)
+
+        # 4. Parameter Sensitivity (from sensitivity)
+        if self.sensitivity_summary:
+            lines.append(self.sensitivity_summary)
+
+        # 5. Exploration State
+        if self.exploration_state:
+            lines.append("## Exploration State")
+            es = self.exploration_state
+            lines.append(f"- Temperature: {es.get('temperature', 0):.2f} (decays each iteration)")
+            lines.append(
+                f"- Exploration budget: {es.get('budget_remaining', 0)}"
+                f"/{es.get('budget_total', 0)} remaining"
+            )
+            lines.append(
+                f"- Convergence: {es.get('metric_history_len', 0)} of "
+                f"{es.get('convergence_window', 5)} window slots filled"
+            )
+            lines.append("")
+
+        # 6. Seed variance section (multi-seed)
         if self.seed_variance:
             lines.append("## Seed Variance")
             sv = self.seed_variance
@@ -134,7 +173,7 @@ class EvolutionContext:
                 )
             lines.append("")
 
-        # Item stability (multi-seed)
+        # 7. Item stability (multi-seed)
         if self.item_stability:
             lines.append("## Unstable Items (vary across seeds)")
             lines.append(
@@ -147,7 +186,7 @@ class EvolutionContext:
                 )
             lines.append("")
 
-        # Category breakdown
+        # 8. Category breakdown
         if self.category_breakdown:
             lines.append("## Category Breakdown")
             for cat in self.category_breakdown:
@@ -157,7 +196,7 @@ class EvolutionContext:
                 )
             lines.append("")
 
-        # Regression info
+        # 9. Regression info
         if self.items_regressed:
             lines.append("## Regressions (CRITICAL)")
             lines.append(f"**{len(self.items_regressed)} items regressed** from baseline:")
@@ -179,7 +218,7 @@ class EvolutionContext:
                 )
             lines.append("")
 
-        # Failing items
+        # 10. Failing items
         if self.failing_items:
             lines.append("## Failing Items")
             lines.append(f"{len(self.failing_items)} items failing:")
@@ -206,19 +245,40 @@ class EvolutionContext:
                 )
             lines.append("")
 
-        # Failure clusters
+        # 11. Enhanced Failure Patterns
         if self.failure_clusters:
             lines.append("## Failure Patterns")
             for cluster in self.failure_clusters:
-                methods = ", ".join(cluster.get("common_methods", []))
-                lines.append(
-                    f"- **{cluster['pattern']}** ({cluster['count']} items)"
-                )
-                if methods:
-                    lines.append(f"  Common methods: {methods}")
+                cluster_type = cluster.get("cluster_type", "")
+                achievable = cluster.get("achievable", True)
+
+                if cluster_type in ("no_signal", "below_threshold", "single_method_capped"):
+                    # Enhanced actionable cluster
+                    tag = "[ACHIEVABLE]" if achievable else "[NOT ACHIEVABLE]"
+                    lines.append(
+                        f"### {cluster['pattern']} ({cluster['count']} items) {tag}"
+                    )
+                    if cluster.get("counterfactual"):
+                        lines.append(cluster["counterfactual"])
+                    if cluster.get("suggestion"):
+                        lines.append(f"Suggestion: {cluster['suggestion']}")
+                    if cluster.get("item_ids"):
+                        items_str = ", ".join(cluster["item_ids"][:10])
+                        if len(cluster["item_ids"]) > 10:
+                            items_str += f" (+{len(cluster['item_ids']) - 10} more)"
+                        lines.append(f"Items: {items_str}")
+                    lines.append("")
+                else:
+                    # Standard cluster
+                    methods = ", ".join(cluster.get("common_methods", []))
+                    lines.append(
+                        f"- **{cluster['pattern']}** ({cluster['count']} items)"
+                    )
+                    if methods:
+                        lines.append(f"  Common methods: {methods}")
             lines.append("")
 
-        # Method effectiveness
+        # 12. Method effectiveness
         if self.method_effectiveness:
             lines.append("## Method Effectiveness")
             for me in self.method_effectiveness:
@@ -232,17 +292,17 @@ class EvolutionContext:
 
         if self.methods_never_firing:
             lines.append("### Methods Never Firing")
-            for m in self.methods_never_firing:
-                lines.append(f"- {m}")
+            for m_name in self.methods_never_firing:
+                lines.append(f"- {m_name}")
             lines.append("")
 
         if self.methods_causing_fp:
             lines.append("### Methods Causing False Positives")
-            for m in self.methods_causing_fp:
-                lines.append(f"- **{m['method']}**: {m['false_detections']} false detections")
+            for m_fp in self.methods_causing_fp:
+                lines.append(f"- **{m_fp['method']}**: {m_fp['false_detections']} false detections")
             lines.append("")
 
-        # Domain-specific diagnostics
+        # 13. Domain-specific diagnostics
         if self.diagnostic_clusters:
             lines.append("## Domain-Specific Diagnosis")
             for cluster in self.diagnostic_clusters:
@@ -255,7 +315,7 @@ class EvolutionContext:
                 lines.append(f"  Suggested: {cluster['suggested_action']}")
             lines.append("")
 
-        # Configuration
+        # 14. Configuration
         if self.current_config:
             lines.append("## Current Configuration")
             lines.append("```json")
@@ -265,7 +325,7 @@ class EvolutionContext:
             lines.append("```")
             lines.append("")
 
-        # Constraints
+        # 15. Constraints
         if self.hard_constraints:
             lines.append("## Hard Constraints")
             for c in self.hard_constraints:
@@ -280,6 +340,32 @@ class EvolutionContext:
             )
             lines.append("")
 
+        # 16. How to Make Changes (only in evolve_mode)
+        if self.evolve_mode:
+            lines.append("## How to Make Changes")
+            lines.append("")
+            lines.append("### Option 1: Parameter Proposals (recommended for tuning)")
+            lines.append("Create `.forge-world/parameter-proposal.json`:")
+            lines.append("```json")
+            lines.append('{')
+            lines.append('  "proposals": [')
+            lines.append(
+                '    {"parameter_path": "weight_ela", "new_value": 0.75, '
+                '"reasoning": "High sensitivity impact"},'
+            )
+            lines.append(
+                '    {"parameter_path": "convergence_confidence_threshold", '
+                '"new_value": 0.55, "reasoning": "Recover near-misses"}'
+            )
+            lines.append('  ],')
+            lines.append('  "agent_notes": "Focusing on top-2 sensitivity parameters"')
+            lines.append('}')
+            lines.append("```")
+            lines.append("")
+            lines.append("### Option 2: File Editing (for structural/algorithmic changes)")
+            lines.append("Edit source files directly. Both options can be combined.")
+            lines.append("")
+
         return "\n".join(lines)
 
 
@@ -291,6 +377,11 @@ def build_evolution_context(
     optimization_target: dict[str, Any] | None = None,
     sample_size: int | None = None,
     diagnostics: list[dict[str, Any]] | None = None,
+    # New parameters:
+    memory: Any | None = None,
+    sensitivity: Any | None = None,
+    evolve_mode: bool = False,
+    exploration_state: dict[str, Any] | None = None,
 ) -> EvolutionContext:
     """Build an EvolutionContext from a benchmark report and optional regression data.
 
@@ -308,6 +399,20 @@ def build_evolution_context(
         )
     if diagnostics:
         ctx.diagnostic_clusters = diagnostics
+
+    # Add memory summary
+    if memory is not None:
+        ctx.memory_summary = memory.to_prompt_context()
+
+    # Add sensitivity summary
+    if sensitivity is not None:
+        ctx.sensitivity_summary = sensitivity.to_prompt_context()
+
+    # Set evolve mode and exploration state
+    ctx.evolve_mode = evolve_mode
+    if exploration_state:
+        ctx.exploration_state = exploration_state
+
     return ctx
 
 
@@ -337,8 +442,11 @@ def _build_single_context(
     near_misses = find_near_misses(result_dicts)
     near_miss_dicts = [nm.to_dict() for nm in near_misses]
 
-    clusters = find_failure_clusters(result_dicts)
-    cluster_dicts = [c.to_dict() for c in clusters]
+    # Use actionable clusters (superset of existing)
+    actionable_clusters = find_actionable_failure_clusters(
+        result_dicts, report.config_snapshot
+    )
+    cluster_dicts = [c.to_dict() for c in actionable_clusters]
 
     method_metrics = [me.to_dict() for me in report.method_metrics.values()]
     method_metrics.sort(key=lambda m: m["times_fired"], reverse=True)
@@ -406,8 +514,11 @@ def _build_multi_context(
     near_misses = find_near_misses(result_dicts)
     near_miss_dicts = [nm.to_dict() for nm in near_misses]
 
-    clusters = find_failure_clusters(result_dicts)
-    cluster_dicts = [c.to_dict() for c in clusters]
+    # Use actionable clusters (superset of existing)
+    actionable_clusters = find_actionable_failure_clusters(
+        result_dicts, report.config_snapshot
+    )
+    cluster_dicts = [c.to_dict() for c in actionable_clusters]
 
     method_metrics = [me.to_dict() for me in primary.method_metrics.values()]
     method_metrics.sort(key=lambda m: m["times_fired"], reverse=True)

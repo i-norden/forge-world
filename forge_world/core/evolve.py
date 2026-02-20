@@ -2,17 +2,27 @@
 
 Runs an iterative cycle: benchmark -> build context -> invoke agent ->
 check constraints -> accept/reject -> repeat.
+
+Includes iteration memory, parameter proposals, change decomposition,
+smart convergence, and exploration budget.
 """
 
 from __future__ import annotations
 
+import math
+import random
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from forge_world.core.agent_interface import build_evolution_context
+from forge_world.core.memory import EvolutionMemory, MemoryEntry, compute_parameter_diff
+from forge_world.core.proposals import ProposalFile, apply_proposals, rollback_proposals
 from forge_world.core.runner import BenchmarkRunner, MultiBenchmarkReport
+from forge_world.core.sensitivity import SensitivityReport, compute_sensitivity
 from forge_world.core.snapshots import SnapshotManager
 
 
@@ -28,6 +38,31 @@ class EvolutionConfig:
     )
     convergence_patience: int = 3
     context_file: str = ".forge-world/evolution-context.md"
+
+    # Memory
+    memory_file: str = ".forge-world/evolution-memory.json"
+
+    # Sensitivity
+    run_sensitivity: bool = True
+    sensitivity_cache_file: str = ".forge-world/sensitivity-cache.json"
+
+    # Proposals
+    proposal_file: str = ".forge-world/parameter-proposal.json"
+
+    # Decomposition
+    decompose_changes: bool = True
+
+    # Exploration
+    exploration_budget: int = 0  # lateral/worse moves allowed (0 = greedy)
+    exploration_temperature: float = 1.0  # initial acceptance temperature
+    temperature_decay: float = 0.8  # temperature *= decay each round
+
+    # Pareto
+    pareto_metrics: list[str] | None = None  # if set, accept Pareto-improving moves
+
+    # Convergence
+    convergence_window: int = 5  # rolling window for oscillation detection
+    min_progress: float = 0.001  # minimum metric change to count as progress
 
 
 @dataclass
@@ -163,10 +198,21 @@ class EvolutionLoop:
         result = EvolutionResult()
         no_improvement_count = 0
 
-        # Initial benchmark
+        # 1. Load memory (persists across restarts)
+        memory = EvolutionMemory.load(Path(self.config.memory_file))
+
+        # 2. Run sensitivity analysis (if enabled, cached)
+        sensitivity = self._maybe_run_sensitivity()
+
+        # 3. Initial benchmark
         report = self._run_bench()
         metrics_before = _extract_metrics(report)
         result.starting_metrics = dict(metrics_before)
+
+        # Exploration state
+        temperature = self.config.exploration_temperature
+        exploration_remaining = self.config.exploration_budget
+        metric_history: list[float] = []
 
         for i in range(1, self.config.max_iterations + 1):
             if self.on_iteration_start:
@@ -179,7 +225,10 @@ class EvolutionLoop:
                 metrics_before=dict(metrics_before),
             )
 
-            # Build and write context
+            # 4. Capture config before agent runs
+            config_before = self._capture_config()
+
+            # 5. Build context (with memory, sensitivity, enhanced clusters)
             regression = None
             try:
                 regression = self.snapshot_manager.check(report, baseline_name=self.baseline_name)
@@ -203,6 +252,14 @@ class EvolutionLoop:
                 except Exception:
                     pass
 
+            exploration_state = {
+                "temperature": round(temperature, 4),
+                "budget_remaining": exploration_remaining,
+                "budget_total": self.config.exploration_budget,
+                "metric_history_len": len(metric_history),
+                "convergence_window": self.config.convergence_window,
+            }
+
             context = build_evolution_context(
                 report=report,
                 regression=regression,
@@ -211,14 +268,22 @@ class EvolutionLoop:
                 optimization_target=self.config.optimization_target,
                 sample_size=self.run_kwargs.get("sample_size"),
                 diagnostics=diagnostics_data,
+                memory=memory,
+                sensitivity=sensitivity,
+                evolve_mode=True,
+                exploration_state=exploration_state if self.config.exploration_budget > 0 else None,
             )
 
             self._write_context(context)
 
-            # Invoke agent
+            # 6. Invoke agent
             try:
                 agent_ok = self._invoke_agent()
             except Exception:
+                self._record_memory_entry(
+                    memory, i, config_before, [], metrics_before,
+                    None, False, "agent_error", [], "",
+                )
                 iteration.rollback_reason = "agent_error"
                 result.iterations.append(iteration)
                 result.convergence_reason = "agent_error"
@@ -227,6 +292,10 @@ class EvolutionLoop:
                 break
 
             if not agent_ok:
+                self._record_memory_entry(
+                    memory, i, config_before, [], metrics_before,
+                    None, False, "agent_error", [], "",
+                )
                 iteration.rollback_reason = "agent_error"
                 result.iterations.append(iteration)
                 result.convergence_reason = "agent_error"
@@ -234,11 +303,29 @@ class EvolutionLoop:
                     self.on_iteration_complete(i, iteration)
                 break
 
-            # Check for changes
-            has_changes = self._check_for_changes()
+            # 7. Check for proposals
+            proposal = ProposalFile.load(Path(self.config.proposal_file))
+            old_config = None
+            agent_reasoning = ""
+            if proposal:
+                try:
+                    old_config = apply_proposals(self.runner.pipeline, proposal.proposals)
+                    agent_reasoning = proposal.agent_notes
+                except (KeyError, Exception):
+                    pass
+                Path(self.config.proposal_file).unlink(missing_ok=True)
+
+            # 8. Check for file changes
+            has_file_changes = self._check_for_changes()
+            has_proposal_changes = proposal is not None and old_config is not None
+            has_changes = has_file_changes or has_proposal_changes
             iteration.had_changes = has_changes
 
             if not has_changes:
+                self._record_memory_entry(
+                    memory, i, config_before, [], metrics_before,
+                    None, False, "no_changes", [], agent_reasoning,
+                )
                 no_improvement_count += 1
                 iteration.rollback_reason = "no_changes"
                 result.iterations.append(iteration)
@@ -249,50 +336,188 @@ class EvolutionLoop:
                     break
                 continue
 
-            # Re-run benchmark
-            new_report = self._run_bench()
-            metrics_after = _extract_metrics(new_report)
-            iteration.metrics_after = metrics_after
+            # 9. Decompose if multiple files changed
+            decomposed = False
+            if self.config.decompose_changes and has_file_changes:
+                changed_files = self._get_changed_files()
+                if len(changed_files) > 1:
+                    accepted_files, decomposed_metrics = self._decompose_and_test(
+                        metrics_before
+                    )
+                    if decomposed_metrics is not None:
+                        decomposed = True
+                        metrics_after = decomposed_metrics
+                        iteration.metrics_after = metrics_after
 
-            # Check constraints
-            violations = self._check_constraints(metrics_after)
-            if violations:
-                iteration.constraint_violated = True
-                iteration.constraint_violations = violations
-                iteration.rollback_reason = f"constraint_violated: {', '.join(violations)}"
-                self._rollback()
+                        violations = self._check_constraints(metrics_after)
+                        if violations:
+                            iteration.constraint_violated = True
+                            iteration.constraint_violations = violations
+                            reason = f"constraint_violated: {', '.join(violations)}"
+                            iteration.rollback_reason = reason
+                            self._rollback()
+                            if old_config:
+                                rollback_proposals(self.runner.pipeline, old_config)
+                            config_after = self._capture_config()
+                            param_changes = compute_parameter_diff(config_before, config_after)
+                            self._record_memory_entry(
+                                memory, i, config_before, accepted_files, metrics_before,
+                                metrics_after, False, reason, violations, agent_reasoning,
+                                param_changes=param_changes,
+                            )
+                            result.iterations.append(iteration)
+                            if self.on_iteration_complete:
+                                self.on_iteration_complete(i, iteration)
+                            no_improvement_count += 1
+                            if no_improvement_count >= self.config.convergence_patience:
+                                result.convergence_reason = "converged"
+                                break
+                            continue
+
+                        accept, reason = self._should_accept(
+                            metrics_before, metrics_after, i,
+                            temperature, exploration_remaining,
+                        )
+                        iteration.improved = self._is_improved(metrics_before, metrics_after)
+                        iteration.accepted = accept
+
+                        config_after = self._capture_config()
+                        param_changes = compute_parameter_diff(config_before, config_after)
+
+                        if accept:
+                            if reason == "exploration":
+                                exploration_remaining -= 1
+                            self._commit_changes(i, metrics_before, metrics_after)
+                            self._record_memory_entry(
+                                memory, i, config_before, accepted_files, metrics_before,
+                                metrics_after, True, reason, [], agent_reasoning,
+                                param_changes=param_changes,
+                            )
+                            metrics_before = metrics_after
+                            report = self._run_bench()
+                            no_improvement_count = 0
+                        else:
+                            iteration.rollback_reason = reason
+                            self._rollback()
+                            if old_config:
+                                rollback_proposals(self.runner.pipeline, old_config)
+                            self._record_memory_entry(
+                                memory, i, config_before, accepted_files, metrics_before,
+                                metrics_after, False, reason, [], agent_reasoning,
+                                param_changes=param_changes,
+                            )
+                            no_improvement_count += 1
+
+                        result.iterations.append(iteration)
+                        if self.on_iteration_complete:
+                            self.on_iteration_complete(i, iteration)
+
+                        metric_history.append(
+                            metrics_after.get(self.config.optimization_target.get("metric", "sensitivity"), 0)
+                        )
+                        temperature *= self.config.temperature_decay
+
+                        if no_improvement_count >= self.config.convergence_patience:
+                            result.convergence_reason = "converged"
+                            break
+
+                        converged, conv_reason = self._detect_convergence(metric_history)
+                        if converged:
+                            result.convergence_reason = conv_reason
+                            break
+
+                        continue
+
+            if not decomposed:
+                # 10. Benchmark (all-or-nothing path)
+                new_report = self._run_bench()
+                metrics_after = _extract_metrics(new_report)
+                iteration.metrics_after = metrics_after
+
+                # Get changed files for memory
+                changed_files = self._get_changed_files() if has_file_changes else []
+
+                # 11. Check constraints
+                violations = self._check_constraints(metrics_after)
+                if violations:
+                    iteration.constraint_violated = True
+                    iteration.constraint_violations = violations
+                    reason = f"constraint_violated: {', '.join(violations)}"
+                    iteration.rollback_reason = reason
+                    self._rollback()
+                    if old_config:
+                        rollback_proposals(self.runner.pipeline, old_config)
+                    config_after = self._capture_config()
+                    param_changes = compute_parameter_diff(config_before, config_after)
+                    self._record_memory_entry(
+                        memory, i, config_before, changed_files, metrics_before,
+                        metrics_after, False, reason, violations, agent_reasoning,
+                        param_changes=param_changes,
+                    )
+                    result.iterations.append(iteration)
+                    if self.on_iteration_complete:
+                        self.on_iteration_complete(i, iteration)
+                    no_improvement_count += 1
+                    if no_improvement_count >= self.config.convergence_patience:
+                        result.convergence_reason = "converged"
+                        break
+                    continue
+
+                # 12. Smart acceptance
+                accept, reason = self._should_accept(
+                    metrics_before, metrics_after, i,
+                    temperature, exploration_remaining,
+                )
+                iteration.improved = self._is_improved(metrics_before, metrics_after)
+                iteration.accepted = accept
+
+                config_after = self._capture_config()
+                param_changes = compute_parameter_diff(config_before, config_after)
+
+                # 13. Accept or reject
+                if accept:
+                    if reason == "exploration":
+                        exploration_remaining -= 1
+                    self._commit_changes(i, metrics_before, metrics_after)
+                    self._record_memory_entry(
+                        memory, i, config_before, changed_files, metrics_before,
+                        metrics_after, True, reason, [], agent_reasoning,
+                        param_changes=param_changes,
+                    )
+                    metrics_before = metrics_after
+                    report = new_report
+                    no_improvement_count = 0
+                else:
+                    iteration.rollback_reason = reason
+                    self._rollback()
+                    if old_config:
+                        rollback_proposals(self.runner.pipeline, old_config)
+                    self._record_memory_entry(
+                        memory, i, config_before, changed_files, metrics_before,
+                        metrics_after, False, reason, [], agent_reasoning,
+                        param_changes=param_changes,
+                    )
+                    no_improvement_count += 1
+
                 result.iterations.append(iteration)
                 if self.on_iteration_complete:
                     self.on_iteration_complete(i, iteration)
-                # Don't break on constraint violation — agent might fix it next iteration
-                no_improvement_count += 1
+
+                # 14. Track metric history and temperature
+                metric_history.append(
+                    metrics_after.get(self.config.optimization_target.get("metric", "sensitivity"), 0)
+                )
+                temperature *= self.config.temperature_decay
+
                 if no_improvement_count >= self.config.convergence_patience:
                     result.convergence_reason = "converged"
                     break
-                continue
 
-            # Check improvement
-            improved = self._is_improved(metrics_before, metrics_after)
-            iteration.improved = improved
-
-            if improved:
-                iteration.accepted = True
-                self._commit_changes(i, metrics_before, metrics_after)
-                metrics_before = metrics_after
-                report = new_report
-                no_improvement_count = 0
-            else:
-                iteration.rollback_reason = "not_improved"
-                self._rollback()
-                no_improvement_count += 1
-
-            result.iterations.append(iteration)
-            if self.on_iteration_complete:
-                self.on_iteration_complete(i, iteration)
-
-            if no_improvement_count >= self.config.convergence_patience:
-                result.convergence_reason = "converged"
-                break
+                # 15. Convergence check
+                converged, conv_reason = self._detect_convergence(metric_history)
+                if converged:
+                    result.convergence_reason = conv_reason
+                    break
         else:
             result.convergence_reason = "max_iterations"
 
@@ -300,6 +525,88 @@ class EvolutionLoop:
         result.accepted_iterations = sum(1 for it in result.iterations if it.accepted)
         result.final_metrics = dict(metrics_before)
         return result
+
+    def _maybe_run_sensitivity(self) -> SensitivityReport | None:
+        """Run sensitivity analysis if enabled, using cache if available."""
+        if not self.config.run_sensitivity:
+            return None
+
+        cache_path = Path(self.config.sensitivity_cache_file)
+        cached = SensitivityReport.load(cache_path)
+
+        # Check if cache is still valid (config hash matches)
+        if cached is not None:
+            try:
+                import hashlib
+                import json
+                current_config = self.runner.pipeline.get_config()
+                current_hash = hashlib.sha256(
+                    json.dumps(current_config, sort_keys=True, default=str).encode()
+                ).hexdigest()[:16]
+                if cached.config_hash == current_hash:
+                    return cached
+            except Exception:
+                pass
+
+        try:
+            target = self.config.optimization_target
+            report = compute_sensitivity(
+                self.runner,
+                target_metric=target.get("metric", "sensitivity"),
+                target_direction=target.get("direction", "max"),
+                hard_constraints=self.config.hard_constraints,
+                run_kwargs=self.run_kwargs,
+            )
+            report.save(cache_path)
+            return report
+        except Exception:
+            return None
+
+    def _capture_config(self) -> dict[str, Any]:
+        """Capture current pipeline config as a dict."""
+        try:
+            config = self.runner.pipeline.get_config()
+            if isinstance(config, dict):
+                return dict(config)
+            if hasattr(config, "model_dump"):
+                return config.model_dump()
+            return dict(config)
+        except Exception:
+            return {}
+
+    def _record_memory_entry(
+        self,
+        memory: EvolutionMemory,
+        iteration: int,
+        config_before: dict[str, Any],
+        files_changed: list[str],
+        metrics_before: dict[str, float],
+        metrics_after: dict[str, float] | None,
+        accepted: bool,
+        reason: str,
+        constraint_violations: list[str],
+        agent_reasoning: str,
+        param_changes: list | None = None,
+    ) -> None:
+        """Create and save a memory entry."""
+        if param_changes is None:
+            config_after = self._capture_config()
+            param_changes = compute_parameter_diff(config_before, config_after)
+
+        entry = MemoryEntry(
+            iteration=iteration,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            files_changed=files_changed,
+            parameter_changes=param_changes,
+            metrics_before=metrics_before,
+            metrics_after=metrics_after,
+            accepted=accepted,
+            reason=reason,
+            constraint_violations=constraint_violations,
+            agent_reasoning=agent_reasoning,
+        )
+        memory.add_entry(entry)
+        memory.save(Path(self.config.memory_file))
 
     def _run_bench(self):
         """Run benchmark using configured strategy."""
@@ -342,6 +649,17 @@ class EvolutionLoop:
         )
         return bool(result.stdout.strip())
 
+    def _get_changed_files(self) -> list[str]:
+        """git diff --name-only → list of changed file paths."""
+        try:
+            result = subprocess.run(
+                ["git", "diff", "--name-only"],
+                capture_output=True, text=True, timeout=10,
+            )
+            return [f for f in result.stdout.strip().split("\n") if f]
+        except Exception:
+            return []
+
     def _check_constraints(self, metrics: dict[str, float]) -> list[str]:
         """Evaluate hard constraints against metrics. Returns list of violations."""
         violations = []
@@ -378,6 +696,267 @@ class EvolutionLoop:
         if direction == "max":
             return after_val > before_val
         return after_val < before_val
+
+    def _should_accept(
+        self,
+        before: dict[str, float],
+        after: dict[str, float],
+        iteration: int,
+        temperature: float,
+        exploration_remaining: int,
+    ) -> tuple[bool, str]:
+        """Smarter acceptance criterion. Decision cascade:
+
+        1. If strictly improved on target metric → ("improved")
+        2. If pareto_metrics set and Pareto-improving → ("pareto_improved")
+        3. If exploration_budget > 0 and temperature allows → ("exploration")
+        4. → ("not_improved")
+        """
+        if self._is_improved(before, after):
+            return True, "improved"
+
+        if self.config.pareto_metrics and self._is_pareto_improving(before, after):
+            return True, "pareto_improved"
+
+        if exploration_remaining > 0 and temperature > 0:
+            target = self.config.optimization_target
+            metric = target.get("metric", "sensitivity")
+            target_before = before.get(metric, 0)
+            target_after = after.get(metric, 0)
+            delta = (target_before - target_after) / max(target_before, 0.001)
+            if delta <= 0:
+                # Equal or better — accept
+                return True, "exploration"
+            accept_prob = math.exp(-delta / temperature)
+            if random.random() < accept_prob:
+                return True, "exploration"
+
+        return False, "not_improved"
+
+    def _is_pareto_improving(
+        self,
+        before: dict[str, float],
+        after: dict[str, float],
+    ) -> bool:
+        """True if after is better on at least one pareto_metric without being
+        worse on any constraint metric."""
+        if not self.config.pareto_metrics:
+            return False
+
+        improved_any = False
+        min_progress = self.config.min_progress
+
+        for metric in self.config.pareto_metrics:
+            before_val = before.get(metric, 0)
+            after_val = after.get(metric, 0)
+            diff = after_val - before_val
+            if diff > min_progress:
+                improved_any = True
+            elif diff < -min_progress:
+                return False  # Worse on a Pareto metric
+
+        # Also check hard constraint metrics aren't violated
+        for constraint in self.config.hard_constraints:
+            c_metric = constraint.get("metric", "")
+            c_op = constraint.get("op", "<=")
+            c_value = float(constraint.get("value", 0))
+            actual = after.get(c_metric)
+            if actual is None:
+                continue
+            if c_op == "<=" and actual > c_value:
+                return False
+            elif c_op == ">=" and actual < c_value:
+                return False
+
+        return improved_any
+
+    def _detect_convergence(
+        self,
+        metric_history: list[float],
+    ) -> tuple[bool, str]:
+        """Check for convergence beyond simple patience counter.
+
+        Uses rolling window over last N target metric values:
+        1. "oscillating": std(window) > 0 but net change < min_progress
+        2. "plateau": all values in window within min_progress of each other
+        """
+        window = self.config.convergence_window
+        if len(metric_history) < window:
+            return False, ""
+
+        recent = metric_history[-window:]
+        min_val = min(recent)
+        max_val = max(recent)
+        net_change = abs(recent[-1] - recent[0])
+
+        # Plateau: all values nearly identical
+        if (max_val - min_val) < self.config.min_progress:
+            return True, "plateau"
+
+        # Oscillating: variance but no net progress
+        if net_change < self.config.min_progress and (max_val - min_val) > self.config.min_progress:
+            return True, "oscillating"
+
+        return False, ""
+
+    def _decompose_and_test(
+        self, metrics_before: dict[str, float],
+    ) -> tuple[list[str], dict[str, float] | None]:
+        """Test multi-file changes independently, accept the best subset.
+
+        Returns: (accepted_files, metrics_after)
+        If metrics_after is None, caller should fall back to all-or-nothing.
+        """
+        try:
+            changed_files = self._get_changed_files()
+            if len(changed_files) <= 1:
+                return (changed_files, None)
+
+            # Save full diff
+            diff_result = subprocess.run(
+                ["git", "diff"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if diff_result.returncode != 0:
+                return (changed_files, None)
+
+            full_patch = diff_result.stdout
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".patch", delete=False
+            ) as f:
+                f.write(full_patch)
+                patch_path = f.name
+
+            # Stash changes
+            subprocess.run(
+                ["git", "stash"],
+                capture_output=True, timeout=10,
+            )
+
+            # Test each file independently
+            file_results: list[tuple[str, dict[str, float], bool]] = []
+            for file_path in changed_files:
+                try:
+                    # Apply only this file's changes
+                    apply_result = subprocess.run(
+                        ["git", "apply", f"--include={file_path}", patch_path],
+                        capture_output=True, timeout=10,
+                    )
+                    if apply_result.returncode != 0:
+                        continue
+
+                    # Benchmark
+                    file_report = self._run_bench()
+                    file_metrics = _extract_metrics(file_report)
+
+                    # Check constraints
+                    violations = self._check_constraints(file_metrics)
+                    file_results.append((file_path, file_metrics, len(violations) == 0))
+
+                    # Reset
+                    subprocess.run(
+                        ["git", "checkout", "--", "."],
+                        capture_output=True, timeout=10,
+                    )
+                except Exception:
+                    subprocess.run(
+                        ["git", "checkout", "--", "."],
+                        capture_output=True, timeout=10,
+                    )
+                    continue
+
+            # Pop stash
+            subprocess.run(
+                ["git", "stash", "pop"],
+                capture_output=True, timeout=10,
+            )
+
+            # Clean up patch file
+            Path(patch_path).unlink(missing_ok=True)
+
+            if not file_results:
+                return (changed_files, None)
+
+            # Select files that don't violate constraints and improve or are neutral
+            target = self.config.optimization_target
+            metric = target.get("metric", "sensitivity")
+            direction = target.get("direction", "max")
+            before_val = metrics_before.get(metric, 0)
+
+            accepted_files = []
+            for file_path, file_metrics, passes_constraints in file_results:
+                if not passes_constraints:
+                    continue
+                after_val = file_metrics.get(metric, 0)
+                if direction == "max":
+                    if after_val >= before_val - self.config.min_progress:
+                        accepted_files.append(file_path)
+                else:
+                    if after_val <= before_val + self.config.min_progress:
+                        accepted_files.append(file_path)
+
+            if not accepted_files:
+                return ([], None)
+
+            # Reset and apply accepted subset
+            subprocess.run(
+                ["git", "checkout", "--", "."],
+                capture_output=True, timeout=10,
+            )
+
+            # Save full diff again and apply subset
+            diff_result2 = subprocess.run(
+                ["git", "stash", "show", "-p"],
+                capture_output=True, text=True, timeout=10,
+            )
+            # Actually, we popped stash already, so we need to re-stash
+            # Let's apply accepted files from the patch
+            for file_path in accepted_files:
+                subprocess.run(
+                    ["git", "apply", f"--include={file_path}", patch_path],
+                    capture_output=True, timeout=10,
+                )
+
+            # Benchmark the combined subset
+            combined_report = self._run_bench()
+            combined_metrics = _extract_metrics(combined_report)
+
+            # Verify constraints on combined
+            violations = self._check_constraints(combined_metrics)
+            if violations:
+                # Fall back to best single file
+                subprocess.run(
+                    ["git", "checkout", "--", "."],
+                    capture_output=True, timeout=10,
+                )
+                if file_results:
+                    # Find best single file
+                    best_file = None
+                    best_val = before_val
+                    for fp, fm, passes in file_results:
+                        if not passes:
+                            continue
+                        val = fm.get(metric, 0)
+                        if direction == "max" and val > best_val:
+                            best_val = val
+                            best_file = (fp, fm)
+                        elif direction == "min" and val < best_val:
+                            best_val = val
+                            best_file = (fp, fm)
+
+                    if best_file:
+                        subprocess.run(
+                            ["git", "apply", f"--include={best_file[0]}", patch_path],
+                            capture_output=True, timeout=10,
+                        )
+                        return ([best_file[0]], best_file[1])
+
+                return ([], None)
+
+            return (accepted_files, combined_metrics)
+
+        except Exception:
+            return ([], None)
 
     def _rollback(self) -> None:
         """Discard uncommitted changes."""

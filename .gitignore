@@ -8,9 +8,12 @@ build/
 # Virtual environment
 .venv/
 
-# forge-world cache (not committed, unlike snapshots)
+# forge-world runtime artifacts (not committed, unlike snapshots)
 .forge-world/cache/
 .forge-world/evolution-context.md
+.forge-world/evolution-memory.json
+.forge-world/sensitivity-cache.json
+.forge-world/parameter-proposal.json
 
 # Test / IDE caches
 .pytest_cache/
@@ -19,3 +22,6 @@ build/
 
 # OS
 .DS_Store
+
+# Misc
+.todo.md

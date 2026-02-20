@@ -757,6 +757,60 @@ def cache_clear(ctx, config_hash: str | None):
 
 
 @cli.command()
+@click.option("--single-seed", default=None, type=int, help="Single-seed mode")
+@click.option("--seeds", default=None, help="Stable seeds, comma-separated")
+@click.option("--exploration-seeds", default=1, type=int, help="Number of exploration seeds")
+@click.option("--sample-size", "-M", default=None, type=int, help="Number of seeded-random items per seed")
+@click.option("--tier", "-t", default=None, help="Run only items in this tier")
+@click.option("--json-output", "json_out", is_flag=True, help="Machine-readable JSON output")
+@click.pass_context
+def sensitivity(
+    ctx,
+    single_seed: int | None,
+    seeds: str | None,
+    exploration_seeds: int,
+    sample_size: int | None,
+    tier: str | None,
+    json_out: bool,
+):
+    """Run parameter sensitivity analysis, print ranked impact report."""
+    from forge_world.core.sensitivity import compute_sensitivity
+
+    quiet = ctx.obj["quiet"] or json_out
+    module_name = _resolve_module(ctx.obj["module_name"])
+    mod = _load_module(module_name)
+    analysis_cache = _build_analysis_cache(ctx.obj["cache_dir"], ctx.obj["no_cache"])
+    runner = _build_runner(mod, quiet=quiet, analysis_cache=analysis_cache)
+    sample_size = _resolve_sample_size(sample_size)
+
+    run_kwargs: dict[str, Any] = {"sample_size": sample_size}
+    if single_seed is not None:
+        run_kwargs["seed"] = single_seed
+    else:
+        run_kwargs["seed_strategy"] = _parse_seed_strategy(seeds, exploration_seeds)
+    if tier is not None:
+        run_kwargs["tier"] = tier
+
+    if not quiet:
+        console.print("[bold]Running parameter sensitivity analysis...[/bold]")
+
+    report = compute_sensitivity(
+        runner,
+        target_metric="sensitivity",
+        target_direction="max",
+        hard_constraints=[{"metric": "fpr", "op": "<=", "value": 0}],
+        run_kwargs=run_kwargs,
+    )
+
+    if json_out:
+        click.echo(json.dumps(report.to_dict(), indent=2, default=str))
+    else:
+        click.echo(report.to_prompt_context())
+        if not quiet:
+            console.print(f"[dim]Config hash: {report.config_hash}[/dim]")
+
+
+@cli.command()
 @click.option("--agent-command", default=None, help="Command to invoke the agent (use {context_file} placeholder)")
 @click.option("--max-iterations", default=None, type=int, help="Maximum evolution iterations")
 @click.option("--patience", default=3, type=int, help="Stop after N rounds without improvement")
@@ -767,6 +821,12 @@ def cache_clear(ctx, config_hash: str | None):
 @click.option("--sample-size", "-M", default=None, type=int, help="Number of seeded-random items per seed")
 @click.option("--tier", "-t", default=None, help="Run only items in this tier")
 @click.option("--json-output", "json_out", is_flag=True, help="Machine-readable JSON output")
+@click.option("--sensitivity/--no-sensitivity", "run_sensitivity", default=True, help="Run sensitivity analysis before evolving")
+@click.option("--exploration-budget", default=0, type=int, help="Number of lateral/worse moves allowed (0 = greedy)")
+@click.option("--temperature", default=1.0, type=float, help="Initial exploration acceptance temperature")
+@click.option("--temperature-decay", default=0.8, type=float, help="Temperature decay per iteration")
+@click.option("--pareto-metrics", default=None, help="Comma-separated metrics for Pareto acceptance")
+@click.option("--decompose/--no-decompose", "decompose_changes", default=True, help="Decompose multi-file changes")
 @click.pass_context
 def evolve(
     ctx,
@@ -780,6 +840,12 @@ def evolve(
     sample_size: int | None,
     tier: str | None,
     json_out: bool,
+    run_sensitivity: bool,
+    exploration_budget: int,
+    temperature: float,
+    temperature_decay: float,
+    pareto_metrics: str | None,
+    decompose_changes: bool,
 ):
     """Autonomous bench-modify-bench evolution loop."""
     from forge_world.core.evolve import EvolutionConfig, EvolutionLoop
@@ -808,12 +874,22 @@ def evolve(
         "optimization_target", {"metric": "sensitivity", "direction": "max"}
     )
 
+    parsed_pareto: list[str] | None = None
+    if pareto_metrics:
+        parsed_pareto = [m.strip() for m in pareto_metrics.split(",")]
+
     config = EvolutionConfig(
         agent_command=resolved_agent_command,
         max_iterations=resolved_max_iterations,
         hard_constraints=hard_constraints,
         optimization_target=optimization_target,
         convergence_patience=patience,
+        run_sensitivity=run_sensitivity,
+        decompose_changes=decompose_changes,
+        exploration_budget=exploration_budget,
+        exploration_temperature=temperature,
+        temperature_decay=temperature_decay,
+        pareto_metrics=parsed_pareto,
     )
 
     # Build run kwargs for the evolution loop

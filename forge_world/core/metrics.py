@@ -400,3 +400,189 @@ def find_failure_clusters(
 
     clusters.sort(key=lambda c: c.count, reverse=True)
     return clusters
+
+
+@dataclass
+class ActionableCluster:
+    """Enhanced failure cluster with counterfactual analysis and actionable suggestion."""
+
+    cluster_type: str  # "no_signal", "below_threshold", "single_method_capped",
+    # "category", "methods" (last two from existing clustering)
+    pattern: str
+    count: int
+    item_ids: list[str] = field(default_factory=list)
+    common_methods: list[str] = field(default_factory=list)
+    common_category: str = ""
+    counterfactual: str = ""  # "5 of 8 would pass if threshold moved from 0.60 to 0.45"
+    suggestion: str = ""  # "Lower convergence_confidence_threshold from 0.60 to 0.45"
+    achievable: bool = True  # False for "no_signal" clusters
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "cluster_type": self.cluster_type,
+            "pattern": self.pattern,
+            "count": self.count,
+            "item_ids": self.item_ids,
+            "common_methods": self.common_methods,
+            "common_category": self.common_category,
+            "counterfactual": self.counterfactual,
+            "suggestion": self.suggestion,
+            "achievable": self.achievable,
+        }
+
+
+def find_actionable_failure_clusters(
+    results: list[dict[str, Any]],
+    config_snapshot: dict[str, Any] | None = None,
+) -> list[ActionableCluster]:
+    """Enhanced failure clustering with counterfactual analysis.
+
+    Produces clusters:
+
+    1. "no_signal": Failures where zero methods flagged anything.
+       achievable=False, suggestion="Undetectable by current methods."
+
+    2. "below_threshold": Failures where methods fired but aggregated confidence
+       was below the convergence threshold. Computes counterfactual: what threshold
+       would rescue how many items.
+
+    3. "single_method_capped": Failures where exactly one method fired — risk was
+       capped by single-method limitations.
+
+    4. Existing category and method-combination clusters converted to
+       ActionableCluster format.
+    """
+    failures = [r for r in results if not r["passed"]]
+    if not failures:
+        return []
+
+    clusters: list[ActionableCluster] = []
+
+    # Read threshold from config if available
+    threshold = 0.60  # default
+    if config_snapshot:
+        threshold = float(
+            config_snapshot.get("convergence_confidence_threshold", threshold)
+        )
+
+    # 1. No-signal failures: zero methods flagged
+    no_signal_ids = []
+    below_threshold_items = []
+    single_method_items = []
+
+    for f in failures:
+        findings = f.get("findings", [])
+        methods_fired = {
+            finding.get("method", "")
+            for finding in findings
+            if finding.get("method")
+        }
+
+        if not methods_fired:
+            no_signal_ids.append(f["item_id"])
+        elif len(methods_fired) == 1:
+            single_method_items.append(f)
+        # Check below_threshold: methods fired but confidence below threshold
+        confidence = float(f.get("confidence", 0.0))
+        if methods_fired and confidence > 0 and confidence < threshold:
+            below_threshold_items.append(f)
+
+    if no_signal_ids:
+        clusters.append(ActionableCluster(
+            cluster_type="no_signal",
+            pattern="Undetectable (no methods produced findings)",
+            count=len(no_signal_ids),
+            item_ids=no_signal_ids,
+            suggestion="Undetectable by current methods.",
+            achievable=False,
+        ))
+
+    # 2. Below-threshold failures with counterfactual
+    if below_threshold_items:
+        # Collect max confidence for each failing item
+        confidences = []
+        for f in below_threshold_items:
+            max_conf = max(
+                (float(finding.get("confidence", 0.0)) for finding in f.get("findings", [])),
+                default=0.0,
+            )
+            confidences.append((f["item_id"], max_conf))
+
+        # Sort descending by confidence to find best threshold
+        confidences.sort(key=lambda x: x[1], reverse=True)
+
+        # Find the threshold that recovers the most items with smallest change
+        best_count = 0
+        best_threshold = threshold
+        for item_id, conf in confidences:
+            candidate_threshold = conf - 0.01  # just below this confidence
+            if candidate_threshold < 0:
+                continue
+            recovered = sum(1 for _, c in confidences if c > candidate_threshold)
+            if recovered > best_count:
+                best_count = recovered
+                best_threshold = round(candidate_threshold, 2)
+
+        counterfactual = (
+            f"{best_count} of {len(below_threshold_items)} would pass if "
+            f"convergence_confidence_threshold lowered from {threshold:.2f} to {best_threshold:.2f}"
+        )
+        suggestion = (
+            f"Lower convergence_confidence_threshold from {threshold:.2f} to {best_threshold:.2f}"
+        )
+
+        clusters.append(ActionableCluster(
+            cluster_type="below_threshold",
+            pattern="Below threshold (methods fired but confidence insufficient)",
+            count=len(below_threshold_items),
+            item_ids=[f["item_id"] for f in below_threshold_items],
+            counterfactual=counterfactual,
+            suggestion=suggestion,
+            achievable=True,
+        ))
+
+    # 3. Single-method capped
+    if single_method_items:
+        # Find the common single methods
+        method_counts: Counter[str] = Counter()
+        for f in single_method_items:
+            methods = {
+                finding.get("method", "")
+                for finding in f.get("findings", [])
+                if finding.get("method")
+            }
+            for m in methods:
+                method_counts[m] += 1
+
+        common_method = method_counts.most_common(1)[0][0] if method_counts else ""
+        suggestion = (
+            f"Increase weight for {common_method} or add corroborating methods."
+            if common_method
+            else "Add corroborating methods."
+        )
+        clusters.append(ActionableCluster(
+            cluster_type="single_method_capped",
+            pattern="Single method capped (risk limited by single-method penalty)",
+            count=len(single_method_items),
+            item_ids=[f["item_id"] for f in single_method_items],
+            common_methods=[common_method] if common_method else [],
+            suggestion=suggestion,
+            achievable=True,
+        ))
+
+    # 4. Existing clusters converted
+    existing = find_failure_clusters(results)
+    for fc in existing:
+        cluster_type = "category" if fc.pattern.startswith("category:") else "methods"
+        clusters.append(ActionableCluster(
+            cluster_type=cluster_type,
+            pattern=fc.pattern,
+            count=fc.count,
+            item_ids=fc.item_ids,
+            common_methods=fc.common_methods,
+            common_category=fc.common_category,
+            achievable=True,
+        ))
+
+    clusters.sort(key=lambda c: c.count, reverse=True)
+    return clusters
